@@ -1359,7 +1359,7 @@ const PricingSection = () => {
                                 <span>30 credits / month</span>
                             </li>
                         </ul>
-                        <Button variant="outline" className="w-full border-slate-700 hover:bg-slate-800 text-white" onClick={() => handlePlanClick('Free')}>
+                        <Button variant="outline" className="w-full border-slate-700 hover:bg-slate-800 text-black" onClick={() => handlePlanClick('Free')}>
                             Join Free
                         </Button>
                     </div>
@@ -1444,7 +1444,7 @@ const PricingSection = () => {
                                 <span>2,000 credits / month</span>
                             </li>
                         </ul>
-                        <Button variant="outline" className="w-full border-slate-700 hover:bg-slate-800 text-white" onClick={() => handlePlanClick('Pro')}>
+                        <Button variant="outline" className="w-full border-slate-700 hover:bg-slate-800 text-black" onClick={() => handlePlanClick('Pro')}>
                             Request Early Access
                         </Button>
                     </div>
@@ -1484,7 +1484,7 @@ const LandingPage: React.FC = () => {
               <a onClick={() => setMenuOpen(false)} href="#product" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Product</a>
               <a onClick={() => setMenuOpen(false)} href="#brand" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Brand</a>
               <a onClick={() => setMenuOpen(false)} href="#faq" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
-              <Link onClick={() => setMenuOpen(false)} to="/auth" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">SignIn</Link>
+              <Link onClick={() => setMenuOpen(false)} to="/auth" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors hidden">SignIn</Link>
             </nav>
           )}
 
@@ -1505,7 +1505,7 @@ const LandingPage: React.FC = () => {
               <a href="#product" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Product</a>
               <a href="#brand" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Brand</a>
               <a href="#faq" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
-              <Link to="/auth" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">SignIn</Link>
+              <Link to="/auth" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors hidden">SignIn</Link>
             </nav>
 
             {/* Mobile Hamburger */}
@@ -1549,7 +1549,10 @@ const LandingPage: React.FC = () => {
 
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-            <button onClick={() => navigate('/auth')} className="bg-[#8A9A5B] hover:bg-[#9AAA6B] text-white font-semibold px-8 py-4 rounded-3xl transition-all duration-200 shadow-lg shadow-[#8A9A5B]/30 hover:shadow-[#8A9A5B]/50 hover:scale-105">
+            <button onClick={() => navigate('/auth')} className="hidden bg-[#8A9A5B] hover:bg-[#9AAA6B] text-white font-semibold px-8 py-4 rounded-3xl transition-all duration-200 shadow-lg shadow-[#8A9A5B]/30 hover:shadow-[#8A9A5B]/50 hover:scale-105">
+              Join the waitlist!
+            </button>
+            <button onClick={() => document.getElementById('pricing').scrollIntoView({ behavior: 'smooth' })} className="bg-[#8A9A5B] hover:bg-[#9AAA6B] text-white font-semibold px-8 py-4 rounded-3xl transition-all duration-200 shadow-lg shadow-[#8A9A5B]/30 hover:shadow-[#8A9A5B]/50 hover:scale-105">
               Join the waitlist!
             </button>
             <button className="hidden flex items-center gap-2 text-[#8A9A5B] hover:text-[#9AAA6B] font-medium transition-colors">

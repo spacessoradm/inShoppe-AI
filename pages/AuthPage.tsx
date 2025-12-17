@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { useAuth } from '../contexts/AuthContext';
+import SoutheastAsiaMap from '../components/maps/SoutheastAsiaMap';
 
 const AuthPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -32,9 +33,7 @@ const AuthPage: React.FC = () => {
         {/* Logo */}
         <div className="absolute top-8 left-8 md:left-16 lg:left-24 xl:left-32">
             <div className="flex items-center gap-2">
-                 {/* Reusing the brand color for the logo icon, but text is dark per auth page design */}
-                 <MessageSquare className="h-6 w-6 text-[#1e293b]" />
-                 <span className="text-xl font-bold text-[#1e293b]">inShoppe AI</span>
+                 <img src="https://rwlecxyfukzberxcpqnr.supabase.co/storage/v1/object/public/general/inShoppe%20Logo.png" className="w-[10%]" />
             </div>
         </div>
 
@@ -109,58 +108,15 @@ const AuthPage: React.FC = () => {
 
       {/* Right Side - Illustration */}
       <div className="hidden lg:flex w-1/2 bg-[#EFF5FF] relative flex-col items-center justify-center overflow-hidden">
-        {/* Map Illustration Container */}
-        <div className="relative w-full h-full flex items-center justify-center p-12">
-             
-             {/* Abstract Map SVG */}
-             <div className="relative w-full max-w-[650px] aspect-[1.6]">
-                <svg viewBox="0 0 800 500" className="w-full h-full drop-shadow-2xl opacity-90" style={{ filter: 'drop-shadow(0px 20px 30px rgba(59, 130, 246, 0.15))' }}>
-                    {/* Simplified US Map Shape */}
-                    <path 
-                        d="M50,120 L180,60 L400,60 L550,120 L750,70 L780,180 L720,350 L600,450 L400,480 L200,420 L50,320 Z" 
-                        fill="#FFFFFF" 
-                        stroke="none"
-                    />
-                    {/* Grid lines inside map */}
-                    <path d="M180,60 L200,420 M400,60 L400,480 M550,120 L600,450" stroke="#F1F5F9" strokeWidth="1" />
-                    <path d="M50,200 L780,200 M50,320 L720,320" stroke="#F1F5F9" strokeWidth="1" />
-                </svg>
-
-                {/* Floating Markers */}
-                {/* Marker 1 */}
-                <div className="absolute top-[25%] left-[15%] flex flex-col items-center animate-bounce duration-[3000ms]">
-                    <div className="bg-white p-1.5 rounded-lg shadow-[0_8px_16px_rgba(0,0,0,0.1)] flex items-center gap-2 border border-blue-50">
-                        <div className="w-5 h-5 rounded-full bg-red-50 flex items-center justify-center text-[10px]">🇺🇸</div>
-                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Outside IR35</span>
-                    </div>
-                    <div className="w-0.5 h-4 bg-blue-200"></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full ring-4 ring-blue-100"></div>
-                </div>
-
-                {/* Marker 2 */}
-                <div className="absolute top-[40%] right-[25%] flex flex-col items-center animate-bounce duration-[4000ms] delay-700">
-                    <div className="bg-white p-1.5 rounded-lg shadow-[0_8px_16px_rgba(0,0,0,0.1)] flex items-center gap-2 border border-blue-50">
-                        <div className="w-5 h-5 rounded-full bg-red-50 flex items-center justify-center text-[10px]">🇺🇸</div>
-                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Payroll</span>
-                    </div>
-                    <div className="w-0.5 h-4 bg-blue-200"></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full ring-4 ring-blue-100"></div>
-                </div>
-
-                {/* Marker 3 */}
-                <div className="absolute bottom-[35%] left-[45%] flex flex-col items-center animate-bounce duration-[3500ms] delay-300">
-                    <div className="bg-white p-1.5 rounded-lg shadow-[0_8px_16px_rgba(0,0,0,0.1)] flex items-center gap-2 border border-blue-50">
-                        <div className="w-5 h-5 rounded-full bg-red-50 flex items-center justify-center text-[10px]">🇺🇸</div>
-                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Independent Contractor</span>
-                    </div>
-                    <div className="w-0.5 h-4 bg-blue-200"></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full ring-4 ring-blue-100"></div>
-                </div>
-             </div>
+        {/* Southeast Asia Map */}
+        <div className="relative w-full max-w-[650px] aspect-[1.4]">
+          <SoutheastAsiaMap />
         </div>
 
+
+
         <div className="absolute bottom-16 text-center w-full px-12">
-            <p className="text-slate-500 text-sm font-medium mb-8">Trusted by teams at:</p>
+            <p className="text-slate-500 text-sm font-medium mb-8">Trusted by teams across Southeast Asia</p>
             <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-6 opacity-60 grayscale hover:grayscale-0 transition-all duration-500">
                  {/* Mock Logos - CSS Text Representations */}
                  <div className="flex items-center gap-1 font-bold text-slate-800 text-lg">
