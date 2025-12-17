@@ -1481,8 +1481,9 @@ const LandingPage: React.FC = () => {
           {menuOpen && (
             <nav className="w-full flex flex-col bg-gray-900/95 backdrop-blur-xl border border-gray-700/50 rounded-xl p-4 md:hidden animate-fadeInUp">
               <a onClick={() => setMenuOpen(false)} href="#how-it-works" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">How it works</a>
-              <a onClick={() => setMenuOpen(false)} href="#product" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Product</a>
-              <a onClick={() => setMenuOpen(false)} href="#brand" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Brand</a>
+              <a onClick={() => setMenuOpen(false)} href="#features" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Features</a>
+              <a onClick={() => setMenuOpen(false)} href="#services" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Services</a>
+              <a onClick={() => setMenuOpen(false)} href="#pricing" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">Pricing</a>
               <a onClick={() => setMenuOpen(false)} href="#faq" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
               <Link onClick={() => setMenuOpen(false)} to="/auth" className="py-2 text-gray-300 hover:text-[#8A9A5B] transition-colors hidden">SignIn</Link>
             </nav>
@@ -1491,9 +1492,7 @@ const LandingPage: React.FC = () => {
           {/* Main Nav Bar */}
           <div className="w-full bg-gray-900/80 backdrop-blur-xl border border-gray-700/50 rounded-2xl px-6 py-3 flex items-center justify-between shadow-2xl">
             <Link to="/" className="flex items-center gap-2">
-              <div className="bg-[#8A9A5B] rounded-lg p-1.5">
-                <MessageSquare className="h-5 w-5 text-white" />
-              </div>
+              <img src="https://rwlecxyfukzberxcpqnr.supabase.co/storage/v1/object/public/general/inShoppe%20Logo.png" className="w-[10%]" />
               <span className="text-lg font-bold bg-gradient-to-r from-white to-[#8A9A5B] bg-clip-text text-transparent">
                 inShoppe AI
               </span>
@@ -1502,8 +1501,9 @@ const LandingPage: React.FC = () => {
             {/* Desktop nav */}
             <nav className="hidden md:flex items-center gap-8">
               <a href="#how-it-works" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">How it works</a>
-              <a href="#product" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Product</a>
-              <a href="#brand" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Brand</a>
+              <a href="#features" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Features</a>
+              <a href="#services" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Services</a>
+              <a href="#pricing" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Pricing</a>
               <a href="#faq" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
               <Link to="/auth" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors hidden">SignIn</Link>
             </nav>
@@ -1614,7 +1614,7 @@ const LandingPage: React.FC = () => {
         </div>
       </section>
 
-      {/* How it works */}
+      {/* How it works section */}
       <section id="how-it-works" className="py-24 bg-black relative">
          <div className="container mx-auto px-4">
              <div className="text-center mb-12">
@@ -1647,8 +1647,8 @@ const LandingPage: React.FC = () => {
          </div>
       </section>
 
-      {/* PRODUCT CAPABILITIES SECTION (New) */}
-      <section id="product" className="py-24 bg-indigo-950/10 border-y border-slate-900">
+      {/* Features Section */}
+      <section id="features" className="py-24 bg-indigo-950/10 border-y border-slate-900">
          <div className="container mx-auto px-4">
             <div className="grid md:grid-cols-2 gap-16 items-center">
                
@@ -1690,7 +1690,7 @@ const LandingPage: React.FC = () => {
       </section>
 
       {/* BRAND SECTION */}
-      <section id="brand" className="py-24 bg-black border-b border-slate-900 relative">
+      <section id="services" className="py-24 bg-black border-b border-slate-900 relative">
          <div className="container mx-auto px-4">
             <div className="grid lg:grid-cols-2 gap-16 items-center">
                 
