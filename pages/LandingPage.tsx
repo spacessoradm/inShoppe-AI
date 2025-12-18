@@ -1656,7 +1656,7 @@ const LandingPage: React.FC = () => {
           <h2 className="text-3xl md:text-4xl font-bold mb-8 text-center">Common Questions</h2>
           <Accordion type="single" collapsible className="w-full">
             {faqData.map((faq, index) => (
-              <AccordionItem key={index} value={`item-${index}`} className="bg-gray-900/50 border border-gray-800 mb-4 rounded-xl px-6 py-4">
+              <AccordionItem key={index} value={`item-${index}`} className="bg-white border border-gray-800 mb-4 rounded-xl px-6 py-4">
                 <AccordionTrigger className="text-lg hover:no-underline">{faq.question}</AccordionTrigger>
                 <AccordionContent className="text-gray-400 text-base mt-2">{faq.answer}</AccordionContent>
               </AccordionItem>
