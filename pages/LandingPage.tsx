@@ -1490,18 +1490,18 @@ const LandingPage: React.FC = () => {
           )}
 
           {/* Main Nav Bar */}
-          <div className="bg-gray-900/80 backdrop-blur-xl border border-gray-700/50 rounded-2xl px-8 py-4 flex items-center gap-4 shadow-2xl">
+          <div className="bg-gray-900/80 backdrop-blur-xl border border-gray-700/50 rounded-2xl px-10 py-4 flex items-center gap-6 shadow-2xl">
             <Link to="/" className="flex items-center gap-2 shrink-0">
               <img src="https://rwlecxyfukzberxcpqnr.supabase.co/storage/v1/object/public/general/inShoppe%20Logo.png" className="h-8 w-auto" />
             </Link>
 
             {/* Desktop nav */}
             <nav className="hidden md:flex items-center gap-4">
-              <a href="#how-it-works" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">How it works</a>
-              <a href="#features" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Features</a>
-              <a href="#services" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Services</a>
-              <a href="#pricing" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">Pricing</a>
-              <a href="#faq" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
+              <a href="#how-it-works" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">How it works</a>
+              <a href="#features" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">Features</a>
+              <a href="#services" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">Services</a>
+              <a href="#pricing" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">Pricing</a>
+              <a href="#faq" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
               <Link to="/auth" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors hidden">SignIn</Link>
             </nav>
 
