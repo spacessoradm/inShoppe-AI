@@ -76,9 +76,18 @@ const AIChatPage: React.FC = () => {
 
     const checkWebhookReachability = async () => {
         if (!webhookUrl) return;
+        
+        // 1. Check for localhost (common mistake)
+        if (webhookUrl.includes("localhost") || webhookUrl.includes("127.0.0.1")) {
+             setWebhookStatus('error');
+             addLog('Error: "localhost" is not reachable by Twilio. Use a public URL (e.g. Supabase, Ngrok).');
+             return;
+        }
+
+        // 2. Check for placeholder
         if (webhookUrl.includes("api.inshoppe.ai")) {
              setWebhookStatus('error');
-             addLog('Error: "api.inshoppe.ai" is a placeholder. You must deploy your own backend.');
+             addLog('Error: "api.inshoppe.ai" is a placeholder. Deploy the backend code first.');
              return;
         }
 
@@ -87,11 +96,10 @@ const AIChatPage: React.FC = () => {
         
         try {
             // We verify by sending a dummy POST. 
-            // Note: This might fail with CORS if the backend doesn't allow it, but that's a hint in itself.
             const res = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ Body: 'Ping', From: 'SystemCheck' })
+                body: new URLSearchParams({ Body: 'PingTest', From: 'SystemCheck' })
             });
             
             if (res.ok || res.status === 200) {
@@ -99,12 +107,12 @@ const AIChatPage: React.FC = () => {
                 addLog('System: Webhook is reachable (200 OK).');
             } else {
                 setWebhookStatus('error');
-                addLog(`Error: Webhook returned status ${res.status}.`);
+                addLog(`Error: Webhook returned status ${res.status}. Check your server logs.`);
             }
         } catch (e) {
-            // Often CORS errors in browser, but implies connectivity issues
             setWebhookStatus('error');
-            addLog('Error: Failed to reach Webhook. Is CORS enabled? Is the URL public?');
+            addLog('Error: Connection failed. This is likely a CORS error.');
+            addLog('Fix: Ensure you redeployed the backend code with the CORS headers (see Backend Setup tab).');
         }
     };
 
@@ -205,44 +213,58 @@ const AIChatPage: React.FC = () => {
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-// 1. Setup Supabase Client
-const supabase = createClient(
-  Deno.env.get('SUPABASE_URL') ?? '',
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-)
+// 0. Setup CORS Headers (Required for Browser Testing)
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
 
 serve(async (req) => {
-  // 2. Handle Twilio Webhook Verification (Optional)
-  const url = new URL(req.url);
-  
-  // 3. Parse Incoming Message
-  const formData = await req.formData();
-  const Body = formData.get('Body')?.toString() || '';
-  const From = formData.get('From')?.toString() || '';
-  const AccountSid = formData.get('AccountSid')?.toString();
+  // 1. Handle CORS Preflight Request
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
 
-  if (!Body) return new Response('No Body', { status: 200 });
+  // 2. Setup Supabase Client
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  )
 
-  console.log(\`Received message from \${From}: \${Body}\`);
+  try {
+      // 3. Parse Incoming Message
+      const formData = await req.formData();
+      const Body = formData.get('Body')?.toString() || '';
+      const From = formData.get('From')?.toString() || '';
+      const AccountSid = formData.get('AccountSid')?.toString();
 
-  // 4. Store in Database (triggers Realtime updates)
-  const { error } = await supabase
-    .from('messages')
-    .insert([{ 
-        text: Body, 
-        sender: 'user', 
-        phone: From,
-        metadata: { twilio_sid: AccountSid }
-    }])
+      if (!Body) {
+          // Respond with 200 OK for ping tests
+          return new Response('Ping Received', { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/plain' } });
+      }
 
-  // 5. Call AI (Gemini) here OR trigger another function
-  // ... Add your Gemini logic here ...
+      console.log(\`Received from \${From}: \${Body}\`);
 
-  // 6. Respond to Twilio (TwiML)
-  // Returning empty TwiML tells Twilio "We received it, don't reply automatically"
-  return new Response('<Response></Response>', {
-    headers: { "Content-Type": "text/xml" },
-  });
+      // 4. Store in Database (triggers Realtime updates)
+      await supabase
+        .from('messages')
+        .insert([{ 
+            text: Body, 
+            sender: 'user', 
+            phone: From,
+            metadata: { twilio_sid: AccountSid }
+        }])
+
+      // 5. Call AI (Gemini) here OR trigger another function
+      // ... Add your Gemini logic here ...
+
+      // 6. Respond to Twilio (TwiML)
+      return new Response('<Response></Response>', {
+        headers: { "Content-Type": "text/xml", ...corsHeaders },
+      });
+  } catch (err) {
+      return new Response(String(err), { status: 500, headers: corsHeaders })
+  }
 })`;
 
     return (
@@ -323,7 +345,7 @@ serve(async (req) => {
                                                 </div>
                                                 {webhookStatus === 'error' && (
                                                     <p className="text-xs text-red-400">
-                                                        Connection Failed. Ensure this URL is publicly accessible and returns 200 OK.
+                                                        Connection Failed. Please check the logs below for details.
                                                     </p>
                                                 )}
                                                 {webhookStatus === 'success' && (
@@ -378,7 +400,7 @@ serve(async (req) => {
                                                 <strong>Cause:</strong> You are likely using a placeholder URL or localhost which isn't public.
                                             </p>
                                             <p className="text-slate-400">
-                                                <strong>Solution:</strong> Go to the "Backend Setup" tab, copy the code, deploy it to Supabase Edge Functions, and paste the <strong>new URL</strong> here.
+                                                <strong>Solution:</strong> Go to the "Backend Setup" tab, copy the updated code (with CORS support), deploy it to Supabase, and paste the <strong>new URL</strong> here.
                                             </p>
                                         </CardContent>
                                     </Card>
