@@ -1502,7 +1502,7 @@ const LandingPage: React.FC = () => {
               <a href="#services" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">Services</a>
               <a href="#pricing" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">Pricing</a>
               <a href="#faq" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">FAQ</a>
-              <Link to="/auth" className="text-sm text-gray-300 hover:text-[#8A9A5B] transition-colors hidden">SignIn</Link>
+              <Link to="/auth" className="text-lg text-gray-300 hover:text-[#8A9A5B] transition-colors">SignIn</Link>
             </nav>
 
             {/* Mobile Hamburger */}

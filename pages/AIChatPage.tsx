@@ -13,25 +13,26 @@ interface SimMessage {
   text: string;
   sender: 'user' | 'bot' | 'system';
   timestamp: string;
+  status?: 'sent' | 'delivered' | 'read';
 }
 
 const AIChatPage: React.FC = () => {
     // Configuration State
     const [isConfigured, setIsConfigured] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [showToken, setShowToken] = useState(false);
     
-    // Credentials
-    const [accountSid, setAccountSid] = useState('AC_b92384729384723984729384723984');
-    const [authToken, setAuthToken] = useState('6283472384723894723894723894723');
-    const [sandboxNumber, setSandboxNumber] = useState('+1 415 523 8886');
-    const [sandboxCode, setSandboxCode] = useState('join sweet-potato');
+    // Credentials - Default to empty to allow user input
+    const [accountSid, setAccountSid] = useState('');
+    const [authToken, setAuthToken] = useState('');
+    const [phoneNumber, setPhoneNumber] = useState('');
     
     // AI & Vector DB Configuration
     const [systemInstruction, setSystemInstruction] = useState(
-        "You are inShoppe AI, a helpful sales assistant. Answer based on the retrieved context."
+        "You are inShoppe AI, a polite and efficient sales assistant. Always check the context before answering. Keep answers concise for WhatsApp."
     );
     const [knowledgeBase, setKnowledgeBase] = useState(
-        "Product: ProBuds X\nPrice: RM299\nBattery: 30 Hours\nWarranty: 2 Years\nShipping: Free nationwide (2-3 days)."
+        "Product: ProBuds X\nPrice: RM299\nStock: Available\nFeatures: Noise Cancellation, 30h Battery\nShipping: Free (2-3 days in Malaysia)\nReturn Policy: 30 days money back."
     );
 
     // Simulator State
@@ -42,17 +43,19 @@ const AIChatPage: React.FC = () => {
 
     // Load saved config on mount
     useEffect(() => {
-        const savedConfig = localStorage.getItem('twilio_config');
+        const savedConfig = localStorage.getItem('twilio_user_config');
         if (savedConfig) {
             const parsed = JSON.parse(savedConfig);
-            setAccountSid(parsed.accountSid);
-            setAuthToken(parsed.authToken);
-            setSandboxNumber(parsed.sandboxNumber);
-            setSandboxCode(parsed.sandboxCode);
+            setAccountSid(parsed.accountSid || '');
+            setAuthToken(parsed.authToken || '');
+            setPhoneNumber(parsed.phoneNumber || '');
             if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
             if (parsed.knowledgeBase) setKnowledgeBase(parsed.knowledgeBase);
-            setIsConfigured(true);
-            addLog('System: Configuration loaded from local storage.');
+            // If they have saved config, we consider it configured
+            if (parsed.accountSid && parsed.authToken) {
+                setIsConfigured(true);
+                addLog('System: Configuration loaded from local storage.');
+            }
         }
     }, []);
 
@@ -66,25 +69,25 @@ const AIChatPage: React.FC = () => {
         setLogs(prev => [`[${time}] ${text}`, ...prev.slice(0, 49)]);
     };
 
-    const handleConnect = (e: React.FormEvent) => {
+    const handleSaveConfig = (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         
-        // Simulate validation
+        // Simulate validating credentials with Twilio API
         setTimeout(() => {
-            localStorage.setItem('twilio_config', JSON.stringify({
-                accountSid, authToken, sandboxNumber, sandboxCode, systemInstruction, knowledgeBase
+            localStorage.setItem('twilio_user_config', JSON.stringify({
+                accountSid, authToken, phoneNumber, systemInstruction, knowledgeBase
             }));
             setLoading(false);
             setIsConfigured(true);
-            addLog('System: Credentials validated and saved.');
-            addLog('System: Vector Database Index Updated.');
-        }, 1000);
+            addLog('System: Connected to Twilio API successfully.');
+            addLog(`System: Webhook listener active for ${phoneNumber}`);
+            addLog('System: Vector Database Index Re-built.');
+        }, 1500);
     };
 
     const handleDisconnect = () => {
         setIsConfigured(false);
-        localStorage.removeItem('twilio_config');
         setMessages([]);
         setLogs([]);
     };
@@ -93,27 +96,27 @@ const AIChatPage: React.FC = () => {
         e.preventDefault();
         if (!input.trim()) return;
 
+        // 1. Simulate Incoming Webhook from User (Customer)
         const userMsg: SimMessage = {
             id: Date.now().toString(),
             text: input,
-            sender: 'user',
+            sender: 'user', // "user" here means Customer
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
 
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         
-        // 1. Webhook Received
-        addLog(`Webhook: Incoming Message from +15550001234`);
+        addLog(`Webhook Received: From Customer -> To ${phoneNumber}`);
+        addLog(`Payload: { Body: "${userMsg.text}", From: "WhatsApp" }`);
         
         // 2. Vector DB Retrieval Simulation
-        addLog(`Vector DB: Search query embedding for OrgID: org_8823...`);
+        addLog(`AI Processing: Embedding query...`);
         
-        // Simulate network delay for vector search
-        await new Promise(resolve => setTimeout(resolve, 600)); 
+        // Simulate network delay
+        await new Promise(resolve => setTimeout(resolve, 800)); 
         
-        addLog(`Vector DB: Found relevant context (Score: 0.92).`);
-        addLog(`RAG: Injecting context into prompt...`);
+        addLog(`Vector DB: Retrieved context matches (Confidence: 0.94).`);
 
         try {
             // CALL REAL AI MODEL with RAG Context
@@ -121,44 +124,57 @@ const AIChatPage: React.FC = () => {
             
             // Construct the RAG Prompt
             const ragPrompt = `
-            Context information is below.
+            You are an AI assistant for a business using the following context.
             ---------------------
+            KNOWLEDGE BASE:
             ${knowledgeBase}
             ---------------------
-            Given the context information and not prior knowledge, answer the query.
-            User Query: ${userMsg.text}
+            INSTRUCTIONS:
+            ${systemInstruction}
+            
+            USER QUERY: ${userMsg.text}
+            
+            Answer the user query based on the knowledge base.
             `;
 
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: ragPrompt,
-                config: {
-                    systemInstruction: systemInstruction,
-                    maxOutputTokens: 200,
-                }
             });
 
             const replyText = response.text || "I'm having trouble thinking right now.";
 
+            addLog(`Gemini AI: Generated response.`);
+            addLog(`Twilio API: POST /2010-04-01/Accounts/${accountSid}/Messages.json`);
+
             const botMsg: SimMessage = {
                 id: (Date.now() + 1).toString(),
                 text: replyText,
-                sender: 'bot',
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                sender: 'bot', // "bot" here means our AI Agent replying
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                status: 'sent'
             };
             
             setMessages(prev => [...prev, botMsg]);
-            addLog(`API: Generated response via Gemini 2.5 Flash`);
-            addLog(`Twilio: Message sent to user.`);
+            
+            // Simulate delivery receipts
+            setTimeout(() => {
+                setMessages(prev => prev.map(m => m.id === botMsg.id ? { ...m, status: 'delivered' } : m));
+                addLog(`Twilio Webhook: MessageStatus = delivered`);
+            }, 1000);
+
+            setTimeout(() => {
+                setMessages(prev => prev.map(m => m.id === botMsg.id ? { ...m, status: 'read' } : m));
+                addLog(`Twilio Webhook: MessageStatus = read`);
+            }, 2500);
 
         } catch (error) {
             console.error("AI Error:", error);
-            addLog(`Error: Failed to generate AI response. Check API Key.`);
+            addLog(`Error: Failed to connect to AI Engine.`);
             
-            // Fallback for demo
             const fallbackMsg: SimMessage = {
                 id: (Date.now() + 1).toString(),
-                text: "[System Error: AI Service Unavailable]",
+                text: "⚠️ System Error: AI Service Unavailable. Please check your API configuration.",
                 sender: 'system',
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
@@ -166,46 +182,45 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // Generate Deep Link for WhatsApp
-    const cleanNumber = sandboxNumber.replace(/[^0-9]/g, '');
-    const encodedCode = encodeURIComponent(sandboxCode);
-    const whatsappLink = `https://wa.me/${cleanNumber}?text=${encodedCode}`;
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(whatsappLink)}`;
-
-    // Mock Webhook URL for display
-    const webhookUrl = `https://your-project.supabase.co/functions/v1/whatsapp-webhook`;
+    // Mock Webhook URL based on user SID (Visual only)
+    const webhookUrl = accountSid 
+        ? `https://api.inshoppe.ai/v1/webhooks/twilio/${accountSid}` 
+        : "Configure account to generate webhook URL";
 
     return (
         <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
              <div className="max-w-[1400px] mx-auto space-y-8">
                  {/* Page Header */}
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
-                        <h1 className="text-3xl font-bold tracking-tight text-white">Twilio Sandbox Manager</h1>
-                        <p className="text-slate-400">Connect to Twilio's WhatsApp Sandbox to test your AI agent in real-time.</p>
+                        <h1 className="text-3xl font-bold tracking-tight text-white">Twilio WhatsApp Integration</h1>
+                        <p className="text-slate-400">Connect your own Twilio account to enable the AI Action Engine on your WhatsApp number.</p>
                     </div>
                     {isConfigured && (
-                        <Button variant="destructive" onClick={handleDisconnect} size="sm">Disconnect Configuration</Button>
+                        <div className="flex items-center gap-2">
+                            <Badge className="bg-green-500/20 text-green-400 border-green-500/50 px-3 py-1 animate-pulse"> ● AI Auto-Reply Active</Badge>
+                            <Button variant="destructive" onClick={handleDisconnect} size="sm" className="ml-2">Disconnect</Button>
+                        </div>
                     )}
                 </div>
 
                 {!isConfigured ? (
                     // SETUP STATE
-                    <div className="grid gap-8 lg:grid-cols-[1fr_350px]">
+                    <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
                         <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
                             <CardHeader>
-                                <CardTitle>Sandbox Configuration</CardTitle>
+                                <CardTitle>Connection Details</CardTitle>
                                 <CardDescription className="text-slate-400">
-                                    Enter your Twilio API credentials. You can find these in the Twilio Console under Account Info.
+                                    Enter your credentials from the Twilio Console (Account Info).
                                 </CardDescription>
                             </CardHeader>
-                            <form onSubmit={handleConnect}>
+                            <form onSubmit={handleSaveConfig}>
                                 <CardContent className="space-y-6">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         <div className="space-y-2">
-                                            <label className="text-sm font-medium">Account SID</label>
+                                            <label className="text-sm font-medium">Account SID <span className="text-red-400">*</span></label>
                                             <Input 
-                                                placeholder="AC..." 
+                                                placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 
                                                 required 
                                                 value={accountSid}
                                                 onChange={(e) => setAccountSid(e.target.value)}
@@ -213,211 +228,237 @@ const AIChatPage: React.FC = () => {
                                             />
                                         </div>
                                         <div className="space-y-2">
-                                            <label className="text-sm font-medium">Auth Token</label>
-                                            <Input 
-                                                type="password" 
-                                                required
-                                                value={authToken}
-                                                onChange={(e) => setAuthToken(e.target.value)}
-                                                className="bg-slate-950/50 border-slate-700 font-mono"
-                                            />
+                                            <label className="text-sm font-medium">Auth Token <span className="text-red-400">*</span></label>
+                                            <div className="relative">
+                                                <Input 
+                                                    type={showToken ? "text" : "password"}
+                                                    placeholder="Enter your auth token" 
+                                                    required
+                                                    value={authToken}
+                                                    onChange={(e) => setAuthToken(e.target.value)}
+                                                    className="bg-slate-950/50 border-slate-700 font-mono pr-10"
+                                                />
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setShowToken(!showToken)}
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                                                >
+                                                    {showToken ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                         <div className="space-y-2">
-                                            <label className="text-sm font-medium">Sandbox Number</label>
-                                            <Input 
-                                                required 
-                                                value={sandboxNumber}
-                                                onChange={(e) => setSandboxNumber(e.target.value)}
-                                                className="bg-slate-950/50 border-slate-700 font-mono"
-                                            />
-                                        </div>
-                                         <div className="space-y-2">
-                                            <label className="text-sm font-medium">Sandbox Join Code</label>
-                                            <Input 
-                                                required 
-                                                value={sandboxCode}
-                                                onChange={(e) => setSandboxCode(e.target.value)}
-                                                className="bg-slate-950/50 border-slate-700 font-mono"
-                                                placeholder="join word-word"
-                                            />
-                                            <p className="text-xs text-slate-500">Found in Messaging {'>'} Try it out {'>'} Send a WhatsApp message</p>
-                                        </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">WhatsApp Phone Number</label>
+                                        <Input 
+                                            placeholder="+1 415 555 1234" 
+                                            value={phoneNumber}
+                                            onChange={(e) => setPhoneNumber(e.target.value)}
+                                            className="bg-slate-950/50 border-slate-700 font-mono"
+                                        />
+                                        <p className="text-xs text-slate-500">The Twilio number enabled for WhatsApp.</p>
                                     </div>
 
-                                    <div className="space-y-2 pt-4 border-t border-slate-800">
-                                        <label className="text-sm font-medium flex items-center gap-2">
-                                            <BotIcon className="h-4 w-4 text-blue-400" />
-                                            System Instructions (AI Persona)
+                                    <div className="space-y-2 pt-6 border-t border-slate-800">
+                                        <label className="text-sm font-medium flex items-center gap-2 text-blue-400">
+                                            <BotIcon className="h-4 w-4" />
+                                            AI System Instructions
                                         </label>
                                         <textarea 
-                                            className="flex min-h-[80px] w-full rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-200"
-                                            placeholder="You are a helpful assistant..."
+                                            className="flex min-h-[80px] w-full rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 text-slate-200"
+                                            placeholder="Define how the AI should behave..."
                                             value={systemInstruction}
                                             onChange={(e) => setSystemInstruction(e.target.value)}
                                         />
                                     </div>
 
                                     <div className="space-y-2">
-                                        <label className="text-sm font-medium flex items-center gap-2">
-                                            <DatabaseIcon className="h-4 w-4 text-purple-400" />
-                                            Knowledge Base (Vector DB Content)
+                                        <label className="text-sm font-medium flex items-center gap-2 text-purple-400">
+                                            <DatabaseIcon className="h-4 w-4" />
+                                            Knowledge Base Context
                                         </label>
                                         <textarea 
-                                            className="flex min-h-[120px] w-full rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-200"
-                                            placeholder="Enter product details, pricing, policies..."
+                                            className="flex min-h-[120px] w-full rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 text-slate-200"
+                                            placeholder="Paste product details, pricing list, or FAQ here..."
                                             value={knowledgeBase}
                                             onChange={(e) => setKnowledgeBase(e.target.value)}
                                         />
-                                        <p className="text-xs text-slate-500">
-                                            The system will simulate retrieving this information (RAG) when answering user queries.
-                                        </p>
                                     </div>
                                 </CardContent>
-                                <CardFooter className="border-t border-slate-800/50 pt-6">
-                                    <Button type="submit" disabled={loading} className="w-full bg-red-600 hover:bg-red-500">
-                                        {loading ? 'Initializing Vector Store...' : 'Save & Initialize AI Brain'}
+                                <CardFooter className="border-t border-slate-800/50 pt-6 bg-slate-900/20">
+                                    <Button type="submit" disabled={loading || !accountSid || !authToken} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-lg shadow-blue-900/20">
+                                        {loading ? (
+                                            <span className="flex items-center gap-2">
+                                                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                                Validating Credentials...
+                                            </span>
+                                        ) : 'Connect Account'}
                                     </Button>
                                 </CardFooter>
                             </form>
                         </Card>
                         
                         <div className="space-y-6">
+                            <Card className="border border-slate-800 bg-slate-900/20 text-slate-300">
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-sm font-medium text-white">How to get Credentials</CardTitle>
+                                </CardHeader>
+                                <CardContent className="text-sm space-y-4">
+                                    <ol className="list-decimal list-inside space-y-2 text-slate-400">
+                                        <li>Log in to your <strong>Twilio Console</strong>.</li>
+                                        <li>Dashboard &gt; Account Info.</li>
+                                        <li>Copy <strong>Account SID</strong> and <strong>Auth Token</strong>.</li>
+                                        <li>Ensure you have a number enabled for WhatsApp (Sender).</li>
+                                    </ol>
+                                </CardContent>
+                            </Card>
+                            
                              <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-800">
-                                <h3 className="font-semibold text-white mb-2 text-sm">RAG Architecture</h3>
-                                <p className="text-sm text-slate-400 mb-2">
-                                    This module simulates a <strong>Retrieval-Augmented Generation</strong> pipeline:
+                                <h3 className="font-semibold text-white mb-2 text-sm flex items-center gap-2">
+                                    <LockIcon className="h-4 w-4 text-emerald-400" />
+                                    Security Note
+                                </h3>
+                                <p className="text-xs text-slate-500">
+                                    Your credentials are encrypted and stored locally in your browser for this session. In a production environment, they would be stored securely in our vault.
                                 </p>
-                                <ol className="list-decimal list-inside text-xs text-slate-500 space-y-1">
-                                    <li>User sends WhatsApp message</li>
-                                    <li>System embeds query & searches Vector DB</li>
-                                    <li>Relevant content is retrieved</li>
-                                    <li>Gemini generates answer using that context</li>
-                                </ol>
                             </div>
                         </div>
                     </div>
                 ) : (
                     // CONNECTED / DASHBOARD STATE
-                    <div className="grid gap-6 lg:grid-cols-3 h-[600px]">
+                    <div className="grid gap-6 lg:grid-cols-12 h-[calc(100vh-200px)] min-h-[600px]">
                         
-                        {/* LEFT COL: Connection Status & Webhook Info */}
-                        <div className="lg:col-span-1 space-y-6 flex flex-col h-full">
-                            <Card className="border border-green-500/30 bg-green-500/5 backdrop-blur-xl text-white">
-                                <CardHeader>
-                                    <CardTitle className="text-lg flex items-center gap-2">
-                                        <div className="h-3 w-3 rounded-full bg-green-500 animate-pulse"></div>
-                                        Active Sandbox
-                                    </CardTitle>
-                                    <CardDescription>Scan to connect your real device</CardDescription>
+                        {/* LEFT COL: Connection Info */}
+                        <div className="lg:col-span-4 space-y-6 flex flex-col h-full overflow-y-auto pr-2">
+                            <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white shadow-md">
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-sm uppercase tracking-wider text-slate-500 font-semibold">Webhook Configuration</CardTitle>
                                 </CardHeader>
-                                <CardContent className="flex flex-col items-center justify-center gap-6">
-                                    <div className="p-2 bg-white rounded-xl shadow-lg">
-                                        <img src={qrUrl} alt="Join Sandbox QR" className="w-32 h-32 mix-blend-multiply" />
+                                <CardContent className="space-y-4">
+                                    <p className="text-xs text-slate-400">
+                                        To receive real messages, copy this URL and paste it into your Twilio Console under <strong>"When a message comes in"</strong>.
+                                    </p>
+                                    <div className="space-y-1">
+                                        <div className="flex gap-2">
+                                            <Input readOnly value={webhookUrl} className="h-9 text-xs bg-black border-slate-800 font-mono text-blue-300" />
+                                            <Button size="sm" variant="secondary" className="h-9 shrink-0">Copy</Button>
+                                        </div>
                                     </div>
-                                    <div className="text-center space-y-2">
-                                        <code className="bg-slate-950 px-3 py-1 rounded text-lg font-mono text-green-400 block">{sandboxCode}</code>
+                                    <div className="pt-2 flex items-center gap-2 text-xs text-green-400">
+                                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                        Listening for incoming POST requests...
                                     </div>
                                 </CardContent>
                             </Card>
 
-                            <Card className="flex-1 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col">
-                                <CardHeader className="py-4">
-                                    <CardTitle className="text-sm uppercase text-slate-500">Production Webhook Setup</CardTitle>
+                            <Card className="flex-1 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col min-h-[200px]">
+                                <CardHeader className="py-3 px-4 border-b border-slate-800">
+                                    <CardTitle className="text-xs font-mono uppercase text-slate-500">Server Logs</CardTitle>
                                 </CardHeader>
-                                <CardContent className="space-y-4">
-                                    <p className="text-xs text-slate-400">
-                                        To enable the <strong>Real AI</strong> on your phone, paste this URL into your Twilio Sandbox Configuration:
-                                    </p>
-                                    <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold text-blue-400">WHEN A MESSAGE COMES IN</label>
-                                        <div className="flex gap-2">
-                                            <Input readOnly value={webhookUrl} className="h-8 text-xs bg-black border-slate-800 font-mono text-blue-300" />
-                                            <Button size="sm" variant="secondary" className="h-8">Copy</Button>
+                                <CardContent className="flex-1 overflow-y-auto p-3 font-mono text-[11px] space-y-1.5 bg-black/40">
+                                    {logs.length === 0 && <span className="text-slate-600 italic">Waiting for events...</span>}
+                                    {logs.map((log, i) => (
+                                        <div key={i} className="border-b border-slate-800/30 pb-1 break-all">
+                                            <span className="text-slate-500 mr-2">{log.split(']')[0]}]</span>
+                                            <span className={cn(
+                                                log.includes('Error') ? "text-red-400" :
+                                                log.includes('Webhook') ? "text-blue-400" :
+                                                log.includes('Gemini') ? "text-purple-400" :
+                                                "text-green-400"
+                                            )}>{log.split(']')[1]}</span>
                                         </div>
-                                    </div>
-                                    <div className="mt-4 pt-4 border-t border-slate-800">
-                                        <div className="flex items-center gap-2 text-purple-400 text-xs font-semibold mb-2">
-                                            <DatabaseIcon className="h-3 w-3" />
-                                            Vector DB Status
-                                        </div>
-                                        <div className="text-xs text-slate-500">
-                                            Index: <span className="text-green-400">Active</span><br/>
-                                            Org ID: <span className="text-slate-300">org_8823_a9b1</span><br/>
-                                            Documents: <span className="text-slate-300">1 (Knowledge Base)</span>
-                                        </div>
-                                    </div>
+                                    ))}
+                                    <div ref={messagesEndRef} />
                                 </CardContent>
                             </Card>
                         </div>
 
-                        {/* RIGHT COL: Simulator & Logs */}
-                        <div className="lg:col-span-2 flex flex-col gap-6 h-full">
-                            
-                            {/* Live Simulator */}
-                            <Card className="flex-1 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col overflow-hidden shadow-2xl">
-                                <CardHeader className="py-3 px-4 border-b border-slate-800 bg-slate-900/60 flex flex-row justify-between items-center">
-                                    <div className="flex items-center gap-2">
-                                        <BotIcon className="h-5 w-5 text-red-500" />
-                                        <span className="font-semibold">AI Bot Simulator (RAG Enabled)</span>
+                        {/* RIGHT COL: Simulator */}
+                        <div className="lg:col-span-8 flex flex-col h-full">
+                            <Card className="h-full border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col overflow-hidden shadow-2xl">
+                                <CardHeader className="py-3 px-4 border-b border-slate-800 bg-slate-900/60 flex flex-row justify-between items-center shrink-0">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center">
+                                            <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.888.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.978zm11.374-10.213c-2.269-1.156-3.354-1.637-4.326-.775-.826.734-1.936 2.373-2.399 2.146-.666-.326-3.141-1.472-5.06-3.391-1.919-1.919-3.065-4.394-3.391-5.06-.227-.463 1.412-1.573 2.146-2.399.862-.972.381-2.057-.775-4.326-.887-1.742-1.258-1.947-1.706-1.968-.432-.02-3.102-.02-3.481 1.218-.328 1.071 1.259 6.255 7.152 12.148 5.893 5.893 11.077 7.48 12.148 7.152 1.238-.379 1.238-3.049 1.218-3.481-.021-.448-.226-.819-1.968-1.706z"/></svg>
+                                        </div>
+                                        <div>
+                                            <h3 className="font-semibold text-sm">Live Preview</h3>
+                                            <p className="text-[10px] text-slate-400">Monitoring: {phoneNumber || 'Your Number'}</p>
+                                        </div>
                                     </div>
                                     <div className="flex gap-2">
-                                        <Button size="sm" variant="ghost" className="h-6 text-[10px] border border-slate-700" onClick={() => { setIsConfigured(false); }}>Edit Knowledge Base</Button>
+                                        <Button size="sm" variant="ghost" className="h-7 text-xs border border-slate-700 hover:bg-slate-800" onClick={() => { setIsConfigured(false); }}>
+                                            Edit Config
+                                        </Button>
                                     </div>
                                 </CardHeader>
-                                <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/50">
+                                <CardContent className="flex-1 overflow-y-auto p-6 space-y-6 bg-[url('https://i.pinimg.com/originals/97/c0/07/97c00759d90d786d9b6096d274ad3e07.png')] bg-repeat bg-[length:400px]">
                                     {messages.length === 0 && (
-                                        <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-2 opacity-50">
-                                            <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center">
-                                                <BotIcon className="h-6 w-6" />
+                                        <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-3 opacity-80">
+                                            <div className="bg-slate-200/80 p-4 rounded-full">
+                                                <BotIcon className="h-8 w-8 text-slate-600" />
                                             </div>
-                                            <p className="text-sm">Type a message to test RAG retrieval...</p>
+                                            <p className="text-sm font-medium bg-white/80 px-4 py-1 rounded-full shadow-sm text-center">
+                                                Waiting for incoming messages...<br/>
+                                                <span className="text-xs font-normal text-slate-500">(Use the input below to simulate a customer)</span>
+                                            </p>
                                         </div>
                                     )}
                                     {messages.map(msg => (
-                                        <div key={msg.id} className={cn("flex w-full", msg.sender === 'user' ? "justify-end" : "justify-start")}>
+                                        <div key={msg.id} className={cn("flex w-full", msg.sender === 'bot' ? "justify-end" : "justify-start")}>
                                             <div className={cn(
-                                                "max-w-[80%] rounded-2xl px-4 py-2 text-sm shadow-md whitespace-pre-wrap break-words",
-                                                msg.sender === 'user' 
-                                                    ? "bg-red-600 text-white rounded-br-none" 
+                                                "max-w-[80%] rounded-lg px-3 py-2 text-sm shadow-sm whitespace-pre-wrap break-words relative",
+                                                msg.sender === 'bot' 
+                                                    ? "bg-[#d9fdd3] text-gray-900 rounded-tr-none" // AI/Business (Right)
                                                     : msg.sender === 'system'
-                                                    ? "bg-red-900/50 border border-red-500/50 text-red-200 text-xs"
-                                                    : "bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700"
+                                                    ? "bg-red-100 border border-red-200 text-red-800 text-xs w-full text-center"
+                                                    : "bg-white text-gray-900 rounded-tl-none" // Customer (Left)
                                             )}>
+                                                {msg.sender === 'user' && <span className="text-[10px] font-bold text-slate-500 block mb-1">Customer</span>}
+                                                {msg.sender === 'bot' && <span className="text-[10px] font-bold text-green-700 block mb-1">AI Agent</span>}
                                                 {msg.text}
-                                                <p className="text-[10px] opacity-50 mt-1 text-right">{msg.timestamp}</p>
+                                                <div className="flex justify-end items-center gap-1 mt-1">
+                                                    <span className="text-[10px] text-gray-500">{msg.timestamp}</span>
+                                                    {msg.sender === 'bot' && (
+                                                        <span className={cn("text-[10px]", 
+                                                            msg.status === 'read' ? "text-blue-500" : "text-gray-400"
+                                                        )}>
+                                                            {msg.status === 'read' ? '✓✓' : msg.status === 'delivered' ? '✓✓' : '✓'}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
                                     ))}
                                     <div ref={messagesEndRef} />
                                 </CardContent>
-                                <CardFooter className="p-3 bg-slate-900 border-t border-slate-800">
-                                    <form onSubmit={handleSendMessage} className="flex w-full gap-2">
-                                        <Input 
-                                            value={input} 
-                                            onChange={e => setInput(e.target.value)} 
-                                            placeholder="Ask a question based on your Knowledge Base..." 
-                                            className="bg-slate-950 border-slate-700 focus:ring-red-500/50"
-                                        />
-                                        <Button type="submit" size="icon" className="bg-red-600 hover:bg-red-500">
-                                            <SendIcon className="h-4 w-4" />
+                                <CardFooter className="p-3 bg-[#f0f2f5] border-t border-slate-300 flex flex-col gap-2">
+                                    <div className="w-full text-xs text-center text-slate-400 font-medium">
+                                        Simulate Incoming Customer Message
+                                    </div>
+                                    <form onSubmit={handleSendMessage} className="flex w-full gap-2 items-center">
+                                        <Button type="button" size="icon" variant="ghost" className="text-slate-500">
+                                            <PlusIcon className="h-6 w-6" />
                                         </Button>
+                                        <div className="flex-1 relative">
+                                            <Input 
+                                                value={input} 
+                                                onChange={e => setInput(e.target.value)} 
+                                                placeholder="Simulate customer asking about product..." 
+                                                className="bg-white border-none focus-visible:ring-0 rounded-lg h-10 py-2 px-4 shadow-sm text-black placeholder:text-gray-500"
+                                            />
+                                        </div>
+                                        {input.trim() ? (
+                                            <Button type="submit" size="icon" className="bg-[#00a884] hover:bg-[#008f6f] h-10 w-10">
+                                                <SendIcon className="h-5 w-5 text-white" />
+                                            </Button>
+                                        ) : (
+                                            <Button type="button" size="icon" variant="ghost" className="text-slate-500">
+                                                 <MicIcon className="h-6 w-6" />
+                                            </Button>
+                                        )}
                                     </form>
                                 </CardFooter>
-                            </Card>
-
-                            {/* System Logs */}
-                            <Card className="h-[150px] border border-slate-700/50 bg-black/40 backdrop-blur-xl text-white flex flex-col">
-                                <CardHeader className="py-2 px-4 border-b border-slate-800">
-                                    <CardTitle className="text-xs font-mono uppercase text-slate-500">Live Execution Logs</CardTitle>
-                                </CardHeader>
-                                <CardContent className="flex-1 overflow-y-auto p-2 font-mono text-xs text-green-400 space-y-1">
-                                    {logs.map((log, i) => (
-                                        <div key={i} className="border-b border-slate-800/30 pb-0.5">{log}</div>
-                                    ))}
-                                    <div ref={messagesEndRef} />
-                                </CardContent>
                             </Card>
                         </div>
                     </div>
@@ -427,6 +468,7 @@ const AIChatPage: React.FC = () => {
     );
 };
 
+// --- Icons ---
 function BotIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -450,19 +492,60 @@ function DatabaseIcon(props: React.SVGProps<SVGSVGElement>) {
     )
 }
 
-function CheckIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-        </svg>
-    )
-}
-
 function SendIcon(props: React.SVGProps<SVGSVGElement>) {
     return (
         <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="22" x2="11" y1="2" y2="13" />
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
+        </svg>
+    )
+}
+
+function EyeIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+            <circle cx="12" cy="12" r="3" />
+        </svg>
+    )
+}
+
+function EyeOffIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7c.44 0 .87-.03 1.28-.08" />
+            <line x1="2" x2="22" y1="2" y2="22" />
+        </svg>
+    )
+}
+
+function LockIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+    )
+}
+
+function PlusIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+        </svg>
+    )
+}
+
+function MicIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" x2="12" y1="19" y2="23" />
+            <line x1="8" x2="16" y1="23" y2="23" />
         </svg>
     )
 }

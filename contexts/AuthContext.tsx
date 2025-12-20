@@ -1,22 +1,20 @@
+
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { Session, User } from '@supabase/supabase-js';
+import { supabase } from '../services/supabase';
 import { Plan } from '../types';
 
-// Hardcoded credentials
-const HARDCODED_EMAIL = 'test@inshoppe.ai';
-const HARDCODED_PASSWORD = 'password';
-const SESSION_KEY = 'inshoppe-auth';
+// Storage keys for non-auth persistence
 const PLAN_KEY = 'inshoppe-plan';
 const WHATSAPP_CONNECTED_KEY = 'inshoppe-whatsapp-connected';
 
-interface User {
-  email: string;
-}
-
 interface AuthContextType {
+  session: Session | null;
   user: User | null;
   loading: boolean;
-  signIn: (email: string, pass: string) => Promise<{ error: string | null }>;
-  signOut: () => void;
+  signIn: (email: string, pass: string) => Promise<{ error: any; data: any }>;
+  signUp: (email: string, pass: string) => Promise<{ error: any; data: any }>;
+  signOut: () => Promise<void>;
   plan: Plan | null;
   selectPlan: (plan: Plan) => void;
   isWhatsAppConnected: boolean;
@@ -26,55 +24,74 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [isWhatsAppConnected, setIsWhatsAppConnected] = useState(false);
 
   useEffect(() => {
-    // Check for a saved session, plan and connection status on initial load
-    try {
-      const savedUser = sessionStorage.getItem(SESSION_KEY);
-      if (savedUser) {
-        setUser(JSON.parse(savedUser));
+    // 1. Initialize Supabase Auth
+    const initAuth = async () => {
+      if (supabase) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          setSession(session);
+          setUser(session?.user ?? null);
+        } catch (error) {
+          console.error('Error checking auth session:', error);
+        }
       }
-      const savedPlan = localStorage.getItem(PLAN_KEY) as Plan | null;
-      if (savedPlan) {
-        setPlan(savedPlan);
-      }
-      const savedWhatsAppStatus = sessionStorage.getItem(WHATSAPP_CONNECTED_KEY);
-      if (savedWhatsAppStatus === 'true') {
-        setIsWhatsAppConnected(true);
-      }
-    } catch (error) {
-      console.error("Failed to parse from storage", error);
-    } finally {
       setLoading(false);
-    }
+    };
+
+    initAuth();
+
+    // 2. Listen for Auth Changes
+    const { data: authListener } = supabase?.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    }) || { data: { subscription: { unsubscribe: () => {} } } };
+
+    // 3. Load Local Settings (Plan, WhatsApp status)
+    const savedPlan = localStorage.getItem(PLAN_KEY) as Plan | null;
+    if (savedPlan) setPlan(savedPlan);
+    
+    const savedWhatsAppStatus = sessionStorage.getItem(WHATSAPP_CONNECTED_KEY);
+    if (savedWhatsAppStatus === 'true') setIsWhatsAppConnected(true);
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
-  const signIn = async (email: string, pass: string): Promise<{ error: string | null }> => {
-    setLoading(true);
-    return new Promise(resolve => {
-        setTimeout(() => {
-            if (email === HARDCODED_EMAIL && pass === HARDCODED_PASSWORD) {
-                const userData = { email };
-                sessionStorage.setItem(SESSION_KEY, JSON.stringify(userData));
-                setUser(userData);
-                setLoading(false);
-                resolve({ error: null });
-            } else {
-                setLoading(false);
-                resolve({ error: 'Invalid email or password.' });
-            }
-        }, 500); // Simulate network delay
+  const signIn = async (email: string, pass: string) => {
+    if (!supabase) return { error: { message: "Supabase not configured" }, data: null };
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password: pass,
     });
+    return { data, error };
   };
 
-  const signOut = () => {
-    sessionStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(WHATSAPP_CONNECTED_KEY);
+  const signUp = async (email: string, pass: string) => {
+    if (!supabase) return { error: { message: "Supabase not configured" }, data: null };
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password: pass,
+    });
+    return { data, error };
+  };
+
+  const signOut = async () => {
+    if (supabase) {
+        await supabase.auth.signOut();
+    }
+    // Clear local app state
+    setSession(null);
     setUser(null);
+    sessionStorage.removeItem(WHATSAPP_CONNECTED_KEY);
     setIsWhatsAppConnected(false);
   };
 
@@ -89,9 +106,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const value = {
+    session,
     user,
     loading,
     signIn,
+    signUp,
     signOut,
     plan,
     selectPlan,

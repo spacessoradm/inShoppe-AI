@@ -10,20 +10,49 @@ const AuthPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSignUp, setIsSignUp] = useState(false);
 
-  const { signIn } = useAuth();
+  const { signIn, signUp } = useAuth();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setMessage(null);
 
-    const { error } = await signIn(email, password);
-
-    if (error) {
-      setError(error);
+    try {
+      if (isSignUp) {
+        // Sign Up Logic
+        const { error, data } = await signUp(email, password);
+        if (error) {
+          setError(error.message);
+        } else if (data.user && !data.session) {
+             setMessage("Account created! Please check your email to verify your account.");
+             // Optional: Switch back to login mode
+        } else {
+             // Successful signup with auto-login (if enabled in supabase)
+        }
+      } else {
+        // Sign In Logic
+        const { error } = await signIn(email, password);
+        if (error) {
+           setError(error.message === "Invalid login credentials" ? "Invalid email or password." : error.message);
+        }
+      }
+    } catch (err: any) {
+      setError("An unexpected error occurred.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
+  };
+
+  const toggleMode = () => {
+      setIsSignUp(!isSignUp);
+      setError(null);
+      setMessage(null);
+      setEmail('');
+      setPassword('');
   };
 
   return (
@@ -38,7 +67,9 @@ const AuthPage: React.FC = () => {
         </div>
 
         <div className="max-w-[400px] w-full mx-auto mt-12 lg:mt-0">
-          <h1 className="text-3xl font-bold text-[#1e293b] mb-1">Welcome back!</h1>
+          <h1 className="text-3xl font-bold text-[#1e293b] mb-1">
+            {isSignUp ? "Create an account" : "Welcome back!"}
+          </h1>
           
           <Button variant="outline" className="w-full h-12 text-slate-700 border-slate-200 hover:bg-slate-50 mt-8 flex items-center justify-center gap-2 font-medium bg-white shadow-sm transition-all">
             <GoogleIcon className="w-5 h-5" />
@@ -54,12 +85,19 @@ const AuthPage: React.FC = () => {
             </div>
           </div>
 
-          <p className="text-slate-600 mb-6 font-medium text-[15px]">Enter your credentials to access the platform.</p>
+          <p className="text-slate-600 mb-6 font-medium text-[15px]">
+            {isSignUp ? "Enter your details to get started." : "Enter your credentials to access the platform."}
+          </p>
 
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleAuth} className="space-y-5">
             {error && (
                <div className="p-3 rounded-md bg-red-50 text-red-600 text-sm border border-red-100 animate-fadeInUp">
                  {error}
+               </div>
+            )}
+             {message && (
+               <div className="p-3 rounded-md bg-green-50 text-green-600 text-sm border border-green-100 animate-fadeInUp">
+                 {message}
                </div>
             )}
             
@@ -85,23 +123,28 @@ const AuthPage: React.FC = () => {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                minLength={6}
                 className="h-11 border-slate-200 bg-white text-slate-900 focus-visible:ring-indigo-600 focus-visible:border-indigo-600 rounded-lg placeholder:text-slate-400 shadow-sm"
               />
             </div>
 
             <Button className="w-full h-11 text-base font-semibold bg-[#435372] hover:bg-[#2c384d] text-white rounded-lg mt-2 shadow-md transition-all" type="submit" disabled={loading}>
-              {loading ? 'Logging in...' : 'Log in'}
+              {loading ? (isSignUp ? 'Creating account...' : 'Logging in...') : (isSignUp ? 'Sign Up' : 'Log in')}
             </Button>
           </form>
 
           <div className="mt-8 space-y-2">
              <div className="flex items-center gap-1 text-sm text-slate-600 font-medium">
-                Don't have an account? 
-                <span className="text-[#435372] font-bold cursor-pointer hover:underline">Sign up</span>
+                {isSignUp ? "Already have an account?" : "Don't have an account?"}
+                <span onClick={toggleMode} className="text-[#435372] font-bold cursor-pointer hover:underline ml-1">
+                    {isSignUp ? "Log in" : "Sign up"}
+                </span>
              </div>
-             <div className="text-sm font-bold text-[#435372] cursor-pointer hover:underline inline-block">
-                Forgot your password?
-             </div>
+             {!isSignUp && (
+                 <div className="text-sm font-bold text-[#435372] cursor-pointer hover:underline inline-block">
+                    Forgot your password?
+                 </div>
+             )}
           </div>
         </div>
       </div>
