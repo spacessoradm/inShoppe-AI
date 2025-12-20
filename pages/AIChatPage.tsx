@@ -65,50 +65,65 @@ const AIChatPage: React.FC = () => {
         }
     }, []);
 
+    // Function to fetch history manually
+    const fetchHistory = async () => {
+        if (!supabase) return;
+        
+        // addLog('System: Fetching latest messages...');
+        const { data, error } = await supabase
+            .from('messages')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(20);
+
+        if (error) {
+            addLog(`Error: Fetch failed - ${error.message}`);
+            return;
+        }
+
+        if (data) {
+            const formatted: SimMessage[] = data.reverse().map((msg: any) => ({
+                id: msg.id.toString(),
+                text: msg.text,
+                sender: msg.sender === 'user' ? 'user' : 'bot',
+                timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                status: 'delivered'
+            }));
+            
+            setMessages(prev => {
+                // Merge strategies: Keep simulation system messages, replace chat history
+                const systemMsgs = prev.filter(m => m.sender === 'system');
+                return [...systemMsgs, ...formatted];
+            });
+        }
+    };
+
     // ------------------------------------------------------------------
-    // NEW: Realtime Subscription to Supabase
+    // NEW: Robust Realtime Subscription
     // ------------------------------------------------------------------
     useEffect(() => {
-        if (!supabase) return;
+        if (!supabase) {
+            addLog("System: Supabase client not initialized. Check services/supabase.ts");
+            return;
+        }
 
-        // 1. Fetch recent history
-        const fetchHistory = async () => {
-            const { data, error } = await supabase
-                .from('messages')
-                .select('*')
-                .order('created_at', { ascending: false })
-                .limit(20);
-
-            if (data) {
-                const formatted: SimMessage[] = data.reverse().map((msg: any) => ({
-                    id: msg.id.toString(),
-                    text: msg.text,
-                    sender: msg.sender === 'user' ? 'user' : 'bot',
-                    timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    status: 'delivered'
-                }));
-                setMessages(prev => {
-                    // Avoid duplicates if switching views
-                    const newIds = new Set(formatted.map(m => m.id));
-                    const filteredPrev = prev.filter(m => !newIds.has(m.id) && m.sender === 'system');
-                    return [...filteredPrev, ...formatted];
-                });
-            }
-        };
-
-        if (webhookUrl) {
+        // Initial fetch
+        if (webhookUrl || isConfigured) {
             fetchHistory();
         }
 
-        // 2. Subscribe to new messages
         const channel = supabase
-            .channel('public:messages')
+            .channel('chat-updates')
             .on(
                 'postgres_changes',
-                { event: 'INSERT', schema: 'public', table: 'messages' },
+                {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'messages',
+                },
                 (payload) => {
                     const newMsg = payload.new;
-                    addLog(`Realtime: New message from ${newMsg.phone || 'Unknown'}`);
+                    addLog(`Realtime: 📩 New message from ${newMsg.phone || 'Unknown'}`);
                     
                     const formattedMsg: SimMessage = {
                         id: newMsg.id.toString(),
@@ -118,15 +133,27 @@ const AIChatPage: React.FC = () => {
                         status: 'delivered'
                     };
                     
-                    setMessages(prev => [...prev, formattedMsg]);
+                    setMessages(prev => {
+                        // Prevent duplicates
+                        if (prev.some(m => m.id === formattedMsg.id)) return prev;
+                        return [...prev, formattedMsg];
+                    });
                 }
             )
-            .subscribe();
+            .subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    addLog('System: 🟢 Connected to Realtime updates.');
+                } else if (status === 'CHANNEL_ERROR') {
+                    addLog('System: 🔴 Realtime connection error. Retrying...');
+                } else if (status === 'TIMED_OUT') {
+                    addLog('System: 🟡 Realtime timed out.');
+                }
+            });
 
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [webhookUrl]);
+    }, [isConfigured, webhookUrl]); // Re-run if config changes
 
     // Auto-scroll chat
     useEffect(() => {
@@ -306,7 +333,8 @@ serve(async (req) => {
 
       if (error) console.error('DB Insert Error:', error);
 
-      // 5. Call AI logic here (omitted for brevity)
+      // 5. Call AI (Gemini) here OR trigger another function
+      // ... Add your Gemini logic here ...
 
       // 6. Respond to Twilio
       return new Response('<Response></Response>', {
@@ -318,7 +346,7 @@ serve(async (req) => {
 })`;
 
     const sqlSnippet = `
--- Run this in your Supabase SQL Editor
+-- 1. Create the table
 create table messages (
   id bigint generated by default as identity primary key,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
@@ -328,7 +356,8 @@ create table messages (
   metadata jsonb
 );
 
--- Enable Realtime
+-- 2. CRITICAL: Enable Realtime!
+-- Without this, the app will not update automatically.
 alter publication supabase_realtime add table messages;
 `;
 
@@ -476,8 +505,10 @@ alter publication supabase_realtime add table messages;
                                 </CardHeader>
                                 <CardContent className="space-y-6">
                                     <div className="space-y-2">
-                                        <h3 className="text-sm font-bold text-white">Step 1: Create Database Table</h3>
-                                        <p className="text-xs text-slate-400">Run this SQL in your Supabase SQL Editor to create the message store.</p>
+                                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                                            Step 1: Create Table & Enable Realtime <span className="text-red-400 text-xs uppercase border border-red-500 px-1 rounded">Critical</span>
+                                        </h3>
+                                        <p className="text-xs text-slate-400">Run this SQL in your Supabase SQL Editor. <strong>You MUST run the `alter publication` line or chat updates won't appear.</strong></p>
                                         <div className="relative">
                                              <pre className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-blue-300 font-mono border border-slate-800">
                                                 <code>{sqlSnippet}</code>
@@ -520,12 +551,17 @@ alter publication supabase_realtime add table messages;
                                                 <label className="text-[10px] text-slate-500 uppercase font-bold">Current Endpoint</label>
                                                 <Input readOnly value={webhookUrl} className="h-9 text-xs bg-black border-slate-800 font-mono text-blue-300" />
                                             </div>
-                                            <div className="pt-2 flex items-center gap-2 text-xs text-green-400">
-                                                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                                                Listening for Realtime updates...
+                                            <div className="pt-2 flex items-center justify-between gap-2 text-xs text-green-400 border-t border-slate-800">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                                    Realtime Active
+                                                </div>
+                                                <Button size="sm" variant="ghost" onClick={fetchHistory} className="h-6 text-[10px] text-slate-400 hover:text-white border border-slate-700">
+                                                    Force Refresh
+                                                </Button>
                                             </div>
-                                             <p className="text-xs text-slate-500 pt-2 border-t border-slate-800">
-                                                Real WhatsApp messages sent to your Twilio number will appear in the chat on the right automatically.
+                                             <p className="text-xs text-slate-500 pt-1">
+                                                Real WhatsApp messages sent to your Twilio number will appear in the chat automatically.
                                             </p>
                                         </>
                                     ) : (
@@ -547,10 +583,11 @@ alter publication supabase_realtime add table messages;
                                         <div key={i} className="border-b border-slate-800/30 pb-1 break-all">
                                             <span className="text-slate-500 mr-2">{log.split(']')[0]}]</span>
                                             <span className={cn(
-                                                log.includes('Error') ? "text-red-400" :
+                                                log.includes('Error') || log.includes('🔴') ? "text-red-400" :
                                                 log.includes('Webhook') ? "text-blue-400" :
+                                                log.includes('Realtime') || log.includes('🟢') ? "text-green-400" :
                                                 log.includes('Gemini') ? "text-purple-400" :
-                                                "text-green-400"
+                                                "text-slate-300"
                                             )}>{log.split(']')[1]}</span>
                                         </div>
                                     ))}
