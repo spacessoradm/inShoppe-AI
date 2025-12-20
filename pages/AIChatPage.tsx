@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
@@ -9,52 +9,78 @@ import { cn } from '../lib/utils';
 import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../services/supabase';
 
-// Types for the simulator
+// Types
 interface SimMessage {
   id: string;
   text: string;
   sender: 'user' | 'bot' | 'system';
-  timestamp: string;
+  timestamp: string; // Display time
+  fullTimestamp: number; // Sorting
+  phone?: string; // Grouping
   status?: 'sent' | 'delivered' | 'read';
 }
 
 const AIChatPage: React.FC = () => {
-    // Configuration State
+    // --- State: Configuration ---
     const [isConfigured, setIsConfigured] = useState(false);
+    const [isEditingConfig, setIsEditingConfig] = useState(false);
     const [loading, setLoading] = useState(false);
     const [showToken, setShowToken] = useState(false);
     
-    // Credentials
+    // --- State: Credentials ---
     const [accountSid, setAccountSid] = useState('');
     const [authToken, setAuthToken] = useState('');
-    const [phoneNumber, setPhoneNumber] = useState('');
+    const [myPhoneNumber, setMyPhoneNumber] = useState('');
     
-    // Webhook Configuration
+    // --- State: Webhook ---
     const [webhookUrl, setWebhookUrl] = useState('');
     const [webhookStatus, setWebhookStatus] = useState<'idle' | 'checking' | 'success' | 'error'>('idle');
     
-    // AI & Vector DB Configuration
+    // --- State: AI ---
     const [systemInstruction, setSystemInstruction] = useState(
-        "You are inShoppe AI, a polite and efficient sales assistant. Always check the context before answering. Keep answers concise for WhatsApp."
+        "You are inShoppe AI, a polite sales assistant. Keep answers concise."
     );
     const [knowledgeBase, setKnowledgeBase] = useState(
-        "Product: ProBuds X\nPrice: RM299\nStock: Available\nFeatures: Noise Cancellation, 30h Battery\nShipping: Free (2-3 days in Malaysia)\nReturn Policy: 30 days money back."
+        "Product: ProBuds X\nPrice: RM299\nStock: Available"
     );
 
-    // Simulator State
+    // --- State: Data ---
     const [messages, setMessages] = useState<SimMessage[]>([]);
-    const [input, setInput] = useState('');
     const [logs, setLogs] = useState<string[]>([]);
+    const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+    const [input, setInput] = useState('');
+    
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    // Load saved config on mount
+    // --- Derived State: Group Messages by Phone ---
+    const chats = useMemo(() => {
+        const groups: Record<string, SimMessage[]> = {};
+        
+        messages.forEach(msg => {
+            // Ignore system messages for the chat grouping unless they have a phone attached
+            const key = msg.phone || 'System Logs';
+            if (msg.sender === 'system' && key === 'System Logs') return;
+            
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(msg);
+        });
+        
+        // Sort keys by latest message timestamp
+        return Object.entries(groups).sort(([, a], [, b]) => {
+            const lastA = a[a.length - 1].fullTimestamp;
+            const lastB = b[b.length - 1].fullTimestamp;
+            return lastB - lastA;
+        });
+    }, [messages]);
+
+    // --- Effect: Load Config ---
     useEffect(() => {
         const savedConfig = localStorage.getItem('twilio_user_config');
         if (savedConfig) {
             const parsed = JSON.parse(savedConfig);
             setAccountSid(parsed.accountSid || '');
             setAuthToken(parsed.authToken || '');
-            setPhoneNumber(parsed.phoneNumber || '');
+            setMyPhoneNumber(parsed.phoneNumber || '');
             setWebhookUrl(parsed.webhookUrl || '');
             if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
             if (parsed.knowledgeBase) setKnowledgeBase(parsed.knowledgeBase);
@@ -65,121 +91,99 @@ const AIChatPage: React.FC = () => {
         }
     }, []);
 
-    // Function to fetch history manually
-    const fetchHistory = async () => {
-        if (!supabase) return;
-        
-        // addLog('System: Fetching latest messages...');
-        const { data, error } = await supabase
-            .from('messages')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(20);
-
-        if (error) {
-            addLog(`Error: Fetch failed - ${error.message}`);
-            return;
-        }
-
-        if (data) {
-            const formatted: SimMessage[] = data.reverse().map((msg: any) => ({
-                id: msg.id.toString(),
-                text: msg.text,
-                sender: msg.sender === 'user' ? 'user' : 'bot',
-                timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                status: 'delivered'
-            }));
-            
-            setMessages(prev => {
-                // Merge strategies: Keep simulation system messages, replace chat history
-                const systemMsgs = prev.filter(m => m.sender === 'system');
-                return [...systemMsgs, ...formatted];
-            });
-        }
-    };
-
-    // ------------------------------------------------------------------
-    // NEW: Robust Realtime Subscription
-    // ------------------------------------------------------------------
+    // --- Effect: Realtime Subscription ---
     useEffect(() => {
-        if (!supabase) {
-            addLog("System: Supabase client not initialized. Check services/supabase.ts");
-            return;
-        }
+        if (!supabase) return;
 
-        // Initial fetch
-        if (webhookUrl || isConfigured) {
-            fetchHistory();
-        }
+        // 1. Initial Fetch
+        const fetchHistory = async () => {
+            const { data, error } = await supabase
+                .from('messages')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(50);
 
+            if (data) {
+                const formatted: SimMessage[] = data.reverse().map((msg: any) => ({
+                    id: msg.id.toString(),
+                    text: msg.text,
+                    sender: msg.sender === 'user' ? 'user' : 'bot',
+                    timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    fullTimestamp: new Date(msg.created_at).getTime(),
+                    phone: msg.phone,
+                    status: 'delivered'
+                }));
+                setMessages(prev => {
+                    // Deduplicate based on ID
+                    const existingIds = new Set(prev.map(p => p.id));
+                    const newMsgs = formatted.filter(f => !existingIds.has(f.id));
+                    return [...prev, ...newMsgs];
+                });
+            }
+        };
+
+        if (webhookUrl || isConfigured) fetchHistory();
+
+        // 2. Subscribe
         const channel = supabase
             .channel('chat-updates')
             .on(
                 'postgres_changes',
-                {
-                    event: 'INSERT',
-                    schema: 'public',
-                    table: 'messages',
-                },
+                { event: 'INSERT', schema: 'public', table: 'messages' },
                 (payload) => {
                     const newMsg = payload.new;
-                    addLog(`Realtime: 📩 New message from ${newMsg.phone || 'Unknown'}`);
+                    addLog(`Realtime: 📩 Message from ${newMsg.phone}`);
                     
                     const formattedMsg: SimMessage = {
                         id: newMsg.id.toString(),
                         text: newMsg.text,
                         sender: newMsg.sender === 'user' ? 'user' : 'bot',
                         timestamp: new Date(newMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        fullTimestamp: new Date(newMsg.created_at).getTime(),
+                        phone: newMsg.phone,
                         status: 'delivered'
                     };
                     
-                    setMessages(prev => {
-                        // Prevent duplicates
-                        if (prev.some(m => m.id === formattedMsg.id)) return prev;
-                        return [...prev, formattedMsg];
-                    });
+                    setMessages(prev => [...prev, formattedMsg]);
+                    
+                    // Auto-select this phone if none selected
+                    if (!selectedPhone) {
+                        setSelectedPhone(newMsg.phone);
+                    }
                 }
             )
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    addLog('System: 🟢 Connected to Realtime updates.');
-                } else if (status === 'CHANNEL_ERROR') {
-                    addLog('System: 🔴 Realtime connection error. Retrying...');
-                } else if (status === 'TIMED_OUT') {
-                    addLog('System: 🟡 Realtime timed out.');
-                }
-            });
+            .subscribe();
 
-        return () => {
-            supabase.removeChannel(channel);
-        };
-    }, [isConfigured, webhookUrl]); // Re-run if config changes
+        return () => { supabase.removeChannel(channel); };
+    }, [isConfigured, webhookUrl]);
 
-    // Auto-scroll chat
+    // --- Auto Scroll ---
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+    }, [messages, selectedPhone]);
 
+    // --- Helpers ---
     const addLog = (text: string) => {
         const time = new Date().toLocaleTimeString();
         setLogs(prev => [`[${time}] ${text}`, ...prev.slice(0, 49)]);
     };
 
+    const handleSaveConfig = (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        setTimeout(() => {
+            localStorage.setItem('twilio_user_config', JSON.stringify({
+                accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, knowledgeBase, webhookUrl
+            }));
+            setLoading(false);
+            setIsConfigured(true);
+            setIsEditingConfig(false);
+            addLog('System: Configuration saved.');
+        }, 800);
+    };
+
     const checkWebhookReachability = async () => {
         if (!webhookUrl) return;
-        
-        if (webhookUrl.includes("localhost") || webhookUrl.includes("127.0.0.1")) {
-             setWebhookStatus('error');
-             addLog('Error: "localhost" is not reachable by Twilio. Use a public URL (Supabase).');
-             return;
-        }
-
-        if (webhookUrl.includes("api.inshoppe.ai")) {
-             setWebhookStatus('error');
-             addLog('Error: "api.inshoppe.ai" is a placeholder. Deploy the backend code first.');
-             return;
-        }
-
         setWebhookStatus('checking');
         addLog(`System: Pinging ${webhookUrl}...`);
         
@@ -192,68 +196,44 @@ const AIChatPage: React.FC = () => {
             
             if (res.ok || res.status === 200) {
                 setWebhookStatus('success');
-                addLog('System: Webhook is reachable (200 OK).');
+                addLog('System: Webhook Reachable (200 OK).');
             } else {
                 setWebhookStatus('error');
-                addLog(`Error: Webhook returned status ${res.status}. Check your server logs.`);
+                addLog(`Error: Webhook returned ${res.status}.`);
             }
         } catch (e) {
             setWebhookStatus('error');
-            addLog('Error: Connection failed. This is likely a CORS error.');
-            addLog('Fix: Ensure you redeployed the backend code with the CORS headers (see Backend Setup tab).');
+            addLog('Error: Connection failed (CORS or Network).');
         }
     };
 
-    const handleSaveConfig = (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setTimeout(() => {
-            localStorage.setItem('twilio_user_config', JSON.stringify({
-                accountSid, authToken, phoneNumber, systemInstruction, knowledgeBase, webhookUrl
-            }));
-            setLoading(false);
-            setIsConfigured(true);
-            addLog('System: Configuration saved.');
-            if (webhookUrl) {
-                addLog(`System: Live Mode Active. Listening to Database...`);
-            } else {
-                 addLog(`System: Simulation Mode active.`);
-            }
-        }, 1000);
-    };
-
-    const handleDisconnect = () => {
-        setIsConfigured(false);
-        setMessages([]);
-        setLogs([]);
-    };
-
-    // --- Simulator Logic ---
-    const handleSendMessage = async (e: React.FormEvent) => {
+    // --- Simulator Send ---
+    const handleSimulatorSend = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!input.trim()) return;
+        
+        const targetPhone = selectedPhone || '+60123456789';
 
-        // 1. Simulate Incoming Webhook
+        // 1. User Message
         const userMsg: SimMessage = {
             id: Date.now().toString(),
             text: input,
             sender: 'user', 
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            fullTimestamp: Date.now(),
+            phone: targetPhone
         };
 
         setMessages(prev => [...prev, userMsg]);
         setInput('');
-        
-        addLog(`Simulator: Sending "${userMsg.text}"`);
         
         // 2. AI Processing
         await new Promise(resolve => setTimeout(resolve, 800)); 
         
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            
             const ragPrompt = `
-            You are an AI assistant for a business.
+            You are an AI assistant.
             CONTEXT: ${knowledgeBase}
             RULES: ${systemInstruction}
             QUERY: ${userMsg.text}
@@ -265,514 +245,314 @@ const AIChatPage: React.FC = () => {
                 contents: ragPrompt,
             });
 
-            const replyText = response.text || "I'm having trouble thinking right now.";
-
-            addLog(`Gemini AI: Generated response.`);
+            const replyText = response.text || "Thinking...";
+            addLog(`Gemini AI: Generated response for ${targetPhone}`);
 
             const botMsg: SimMessage = {
                 id: (Date.now() + 1).toString(),
                 text: replyText,
                 sender: 'bot',
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                fullTimestamp: Date.now() + 1,
+                phone: targetPhone,
                 status: 'sent'
             };
             
             setMessages(prev => [...prev, botMsg]);
 
         } catch (error) {
-            console.error("AI Error:", error);
-            addLog(`Error: Failed to connect to AI Engine.`);
+            addLog(`Error: AI Engine failed.`);
         }
     };
 
-    const supabaseFunctionCode = `
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+    // --- Views ---
+
+    // 1. Not Configured / Setup View
+    if (!isConfigured || isEditingConfig) {
+        return (
+            <div className="h-full overflow-y-auto p-4 lg:p-6">
+                <div className="max-w-3xl mx-auto space-y-6">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h1 className="text-3xl font-bold text-white">Twilio Integration Setup</h1>
+                            <p className="text-slate-400">Connect your WhatsApp Number to enable AI automation.</p>
+                        </div>
+                        {isConfigured && (
+                            <Button variant="ghost" onClick={() => setIsEditingConfig(false)}>Cancel</Button>
+                        )}
+                    </div>
+                    
+                    <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
+                        <form onSubmit={handleSaveConfig}>
+                            <CardHeader>
+                                <CardTitle>Credentials & Configuration</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-6">
+                                <div className="grid md:grid-cols-2 gap-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Account SID</label>
+                                        <Input required value={accountSid} onChange={e => setAccountSid(e.target.value)} className="bg-slate-950/50 border-slate-700" placeholder="AC..." />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Auth Token</label>
+                                        <Input type="password" required value={authToken} onChange={e => setAuthToken(e.target.value)} className="bg-slate-950/50 border-slate-700" placeholder="Token..." />
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Webhook URL (Optional for Sim)</label>
+                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 text-blue-300" placeholder="https://..." />
+                                    <p className="text-xs text-slate-500">Leaving this blank enables Simulator Mode only.</p>
+                                </div>
+                                <div className="grid md:grid-cols-2 gap-6 pt-4 border-t border-slate-800">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">System Instructions</label>
+                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-2 text-sm h-24" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Knowledge Base</label>
+                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-2 text-sm h-24" value={knowledgeBase} onChange={e => setKnowledgeBase(e.target.value)} />
+                                    </div>
+                                </div>
+                            </CardContent>
+                            <CardFooter>
+                                <Button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-500 w-full">
+                                    {loading ? 'Validating...' : 'Save & Connect'}
+                                </Button>
+                            </CardFooter>
+                        </form>
+                    </Card>
+                </div>
+            </div>
+        );
+    }
+
+    // 2. Connected / Main View
+    return (
+        <div className="h-full flex flex-col overflow-hidden bg-slate-950">
+            {/* Header */}
+            <header className="border-b border-slate-800 bg-slate-900/50 p-4 flex justify-between items-center shrink-0">
+                <div className="flex items-center gap-3">
+                    <div className="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></div>
+                    <h1 className="font-bold text-white tracking-wide">AI Action Engine</h1>
+                    <Badge variant="outline" className="text-xs border-slate-700 text-slate-400">
+                        {webhookUrl ? 'Live Backend' : 'Simulator Mode'}
+                    </Badge>
+                </div>
+                <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setIsEditingConfig(true)}>
+                    Settings
+                </Button>
+            </header>
+
+            {/* Tabs Content */}
+            <div className="flex-1 overflow-hidden">
+                <Tabs defaultValue="chat" className="h-full flex flex-col">
+                    <div className="px-4 pt-2 bg-slate-900/50 border-b border-slate-800 shrink-0">
+                         <TabsList className="bg-transparent gap-4">
+                            <TabsTrigger value="chat" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">
+                                Live Chats
+                            </TabsTrigger>
+                            <TabsTrigger value="status" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">
+                                Webhook Status
+                            </TabsTrigger>
+                            <TabsTrigger value="logs" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">
+                                System Logs
+                            </TabsTrigger>
+                        </TabsList>
+                    </div>
+
+                    {/* TAB 1: Live Chat Interface */}
+                    <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0">
+                        {/* Sidebar: Chat List */}
+                        <div className="w-[300px] border-r border-slate-800 flex flex-col bg-slate-900/30">
+                            <div className="p-3 border-b border-slate-800">
+                                <Input placeholder="Search chats..." className="bg-slate-950 border-slate-800 h-8 text-xs" />
+                            </div>
+                            <div className="flex-1 overflow-y-auto">
+                                {chats.length === 0 && (
+                                    <div className="p-4 text-center text-xs text-slate-500">No active chats</div>
+                                )}
+                                {chats.map(([phone, msgs]) => (
+                                    <div 
+                                        key={phone} 
+                                        onClick={() => setSelectedPhone(phone)}
+                                        className={cn(
+                                            "p-3 border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/50 transition-colors",
+                                            selectedPhone === phone && "bg-slate-800 border-l-2 border-l-blue-500"
+                                        )}
+                                    >
+                                        <div className="flex justify-between items-start mb-1">
+                                            <span className="font-semibold text-sm text-slate-200">{phone}</span>
+                                            <span className="text-[10px] text-slate-500">{msgs[msgs.length-1].timestamp}</span>
+                                        </div>
+                                        <p className="text-xs text-slate-400 truncate pr-2">
+                                            {msgs[msgs.length-1].sender === 'bot' ? 'You: ' : ''}
+                                            {msgs[msgs.length-1].text}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Main: Chat View */}
+                        <div className="flex-1 flex flex-col bg-[#0b101a] relative">
+                            {selectedPhone ? (
+                                <>
+                                    {/* Chat Header */}
+                                    <div className="h-14 border-b border-slate-800 flex items-center px-4 bg-slate-900/60 backdrop-blur">
+                                        <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center text-white text-xs font-bold">
+                                            {selectedPhone.slice(1,3)}
+                                        </div>
+                                        <div className="ml-3">
+                                            <h3 className="text-sm font-semibold text-white">{selectedPhone}</h3>
+                                            <p className="text-[10px] text-green-400 flex items-center gap-1">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Active now
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Messages Area */}
+                                    <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[url('https://i.pinimg.com/originals/97/c0/07/97c00759d90d786d9b6096d274ad3e07.png')] bg-repeat bg-[length:400px]">
+                                        {(chats.find(([p]) => p === selectedPhone)?.[1] || []).map(msg => (
+                                            <div key={msg.id} className={cn("flex w-full", msg.sender === 'bot' ? "justify-end" : "justify-start")}>
+                                                 <div className={cn(
+                                                    "max-w-[70%] rounded-lg px-3 py-2 text-sm shadow-sm relative",
+                                                    msg.sender === 'bot' ? "bg-[#005c4b] text-white rounded-tr-none" : "bg-slate-800 text-slate-200 rounded-tl-none"
+                                                )}>
+                                                    {msg.text}
+                                                    <span className="text-[10px] text-white/50 block text-right mt-1">{msg.timestamp}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div ref={messagesEndRef} />
+                                    </div>
+
+                                    {/* Input Area */}
+                                    <form onSubmit={handleSimulatorSend} className="p-3 bg-slate-900 border-t border-slate-800 flex gap-2">
+                                        <Input 
+                                            value={input} 
+                                            onChange={e => setInput(e.target.value)}
+                                            placeholder="Type a message (Simulates User Input if using Simulator)..." 
+                                            className="bg-slate-950 border-slate-700"
+                                        />
+                                        <Button type="submit" size="icon" className="bg-blue-600 hover:bg-blue-500">
+                                            <SendIcon className="w-4 h-4" />
+                                        </Button>
+                                    </form>
+                                </>
+                            ) : (
+                                <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+                                    <div className="h-16 w-16 bg-slate-800 rounded-full flex items-center justify-center mb-4">
+                                        <ChatIcon className="h-8 w-8 text-slate-600" />
+                                    </div>
+                                    <p>Select a conversation to start chatting</p>
+                                </div>
+                            )}
+                        </div>
+                    </TabsContent>
+
+                    {/* TAB 2: Webhook Status */}
+                    <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0">
+                        <div className="max-w-2xl mx-auto space-y-6">
+                            <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
+                                <CardHeader>
+                                    <CardTitle>Webhook Connection</CardTitle>
+                                    <CardDescription>Test connectivity between Twilio and your Supabase backend.</CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="flex gap-2">
+                                        <Input readOnly value={webhookUrl || "No URL Configured"} className="bg-slate-950 font-mono text-blue-300" />
+                                        <Button onClick={checkWebhookReachability}>Test Ping</Button>
+                                    </div>
+                                    
+                                    {webhookStatus === 'success' && (
+                                        <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-md text-green-400 text-sm flex items-center gap-2">
+                                            <CheckCircleIcon className="w-4 h-4" /> Connection Successful (200 OK)
+                                        </div>
+                                    )}
+                                    {webhookStatus === 'error' && (
+                                        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-md text-red-400 text-sm">
+                                            Connection Failed. Ensure your Edge Function is deployed and has CORS enabled.
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+
+                            <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
+                                <CardHeader>
+                                    <CardTitle>Backend Deployment</CardTitle>
+                                    <CardDescription>Supabase Edge Function code required for this integration.</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-400 font-mono border border-slate-800 max-h-[300px]">
+{`import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-// 0. Setup CORS Headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
 serve(async (req) => {
-  // 1. Handle CORS Preflight
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
-  // 2. Setup Supabase Client
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   )
 
   try {
-      // 3. Parse Incoming Message
       const formData = await req.formData();
       const Body = formData.get('Body')?.toString() || '';
       const From = formData.get('From')?.toString() || '';
-      const AccountSid = formData.get('AccountSid')?.toString();
 
-      // Return 200 OK for Ping tests (empty body)
-      if (!Body) {
-          return new Response('Ping Received', { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/plain' } });
-      }
+      if (!Body) return new Response('Ping', { headers: corsHeaders });
 
-      console.log(\`Received from \${From}: \${Body}\`);
+      await supabase.from('messages').insert([{ text: Body, sender: 'user', phone: From }])
 
-      // 4. Store in Database (Frontend Listens to this table!)
-      const { error } = await supabase
-        .from('messages')
-        .insert([{ 
-            text: Body, 
-            sender: 'user', 
-            phone: From,
-            metadata: { twilio_sid: AccountSid }
-        }])
-
-      if (error) console.error('DB Insert Error:', error);
-
-      // 5. Call AI (Gemini) here OR trigger another function
-      // ... Add your Gemini logic here ...
-
-      // 6. Respond to Twilio
-      return new Response('<Response></Response>', {
-        headers: { "Content-Type": "text/xml", ...corsHeaders },
-      });
+      return new Response('<Response></Response>', { headers: { "Content-Type": "text/xml", ...corsHeaders } });
   } catch (err) {
       return new Response(String(err), { status: 500, headers: corsHeaders })
   }
-})`;
-
-    const sqlSnippet = `
--- 1. Create the table
-create table messages (
-  id bigint generated by default as identity primary key,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  text text,
-  sender text, -- 'user' or 'bot'
-  phone text,
-  metadata jsonb
-);
-
--- 2. CRITICAL: Enable Realtime!
--- Without this, the app will not update automatically.
-alter publication supabase_realtime add table messages;
-`;
-
-    return (
-        <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
-             <div className="max-w-[1400px] mx-auto space-y-6">
-                 {/* Page Header */}
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight text-white">Twilio Integration</h1>
-                        <p className="text-slate-400">Manage your WhatsApp connection and AI behavior.</p>
-                    </div>
-                    {isConfigured && (
-                        <div className="flex items-center gap-2">
-                             <Badge className={cn("px-3 py-1", webhookUrl && webhookStatus !== 'error' ? "bg-green-500/20 text-green-400 border-green-500/50" : "bg-yellow-500/20 text-yellow-400 border-yellow-500/50")}>
-                                {webhookUrl ? "● Live Backend Connected" : "○ Simulation Only"}
-                            </Badge>
-                            <Button variant="destructive" onClick={handleDisconnect} size="sm" className="ml-2">Edit Config</Button>
+})`}
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-2">Deploy command: <code>supabase functions deploy whatsapp --no-verify-jwt</code></p>
+                                </CardContent>
+                            </Card>
                         </div>
-                    )}
-                </div>
+                    </TabsContent>
 
-                {!isConfigured ? (
-                    <Tabs defaultValue="credentials" className="w-full">
-                        <TabsList className="grid w-full grid-cols-2 lg:w-[400px] mb-4 bg-slate-800">
-                            <TabsTrigger value="credentials" className="data-[state=active]:bg-slate-700">Credentials</TabsTrigger>
-                            <TabsTrigger value="backend" className="data-[state=active]:bg-slate-700">Backend Setup</TabsTrigger>
-                        </TabsList>
-                        
-                        <TabsContent value="credentials">
-                            <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
-                                <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
-                                    <CardHeader>
-                                        <CardTitle>Connection Details</CardTitle>
-                                        <CardDescription className="text-slate-400">
-                                            Enter your credentials from the Twilio Console.
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <form onSubmit={handleSaveConfig}>
-                                        <CardContent className="space-y-6">
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                                <div className="space-y-2">
-                                                    <label className="text-sm font-medium">Account SID <span className="text-red-400">*</span></label>
-                                                    <Input placeholder="ACxxxxxxxx..." required value={accountSid} onChange={(e) => setAccountSid(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-sm font-medium">Auth Token <span className="text-red-400">*</span></label>
-                                                    <div className="relative">
-                                                        <Input type={showToken ? "text" : "password"} placeholder="Enter token" required value={authToken} onChange={(e) => setAuthToken(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono pr-10" />
-                                                        <button type="button" onClick={() => setShowToken(!showToken)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-                                                            {showToken ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-2">
-                                                <div className="flex justify-between items-center">
-                                                    <label className="text-sm font-medium flex items-center gap-2">
-                                                        Webhook URL (Backend)
-                                                        <Badge variant="outline" className="text-[10px] text-blue-400 border-blue-400/30">Supabase Function</Badge>
-                                                    </label>
-                                                    <button type="button" onClick={checkWebhookReachability} className="text-xs text-slate-400 hover:text-white underline">
-                                                        Test Connection
-                                                    </button>
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <Input 
-                                                        placeholder="https://[project-id].supabase.co/functions/v1/whatsapp" 
-                                                        value={webhookUrl}
-                                                        onChange={(e) => setWebhookUrl(e.target.value)}
-                                                        className={cn(
-                                                            "bg-slate-950/50 border-slate-700 font-mono text-blue-300",
-                                                            webhookStatus === 'error' && "border-red-500 focus:ring-red-500"
-                                                        )}
-                                                    />
-                                                </div>
-                                                {webhookStatus === 'error' && (
-                                                    <p className="text-xs text-red-400">
-                                                        Connection Failed. Please check the logs below for details.
-                                                    </p>
-                                                )}
-                                                {webhookStatus === 'success' && (
-                                                    <p className="text-xs text-green-400">
-                                                        Connection Successful! Twilio can reach this URL.
-                                                    </p>
-                                                )}
-                                                <p className="text-xs text-slate-500">
-                                                    Don't have a backend? Leave blank to use <strong>Simulator Mode</strong>. To receive real messages, follow the "Backend Setup" tab.
-                                                </p>
-                                            </div>
-
-                                            <div className="space-y-2">
-                                                <label className="text-sm font-medium">WhatsApp Phone Number</label>
-                                                <Input placeholder="+1 415 555 1234" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" />
-                                            </div>
-
-                                            <div className="space-y-2 pt-6 border-t border-slate-800">
-                                                <label className="text-sm font-medium flex items-center gap-2 text-blue-400">
-                                                    <BotIcon className="h-4 w-4" />
-                                                    AI System Instructions
-                                                </label>
-                                                <textarea className="flex min-h-[80px] w-full rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50" placeholder="Define behavior..." value={systemInstruction} onChange={(e) => setSystemInstruction(e.target.value)} />
-                                            </div>
-
-                                            <div className="space-y-2">
-                                                <label className="text-sm font-medium flex items-center gap-2 text-purple-400">
-                                                    <DatabaseIcon className="h-4 w-4" />
-                                                    Knowledge Base Context
-                                                </label>
-                                                <textarea className="flex min-h-[120px] w-full rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-purple-500/50" placeholder="Paste product info..." value={knowledgeBase} onChange={(e) => setKnowledgeBase(e.target.value)} />
-                                            </div>
-                                        </CardContent>
-                                        <CardFooter className="border-t border-slate-800/50 pt-6 bg-slate-900/20">
-                                            <Button type="submit" disabled={loading || !accountSid || !authToken} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold">
-                                                {loading ? 'Validating...' : 'Save Configuration'}
-                                            </Button>
-                                        </CardFooter>
-                                    </form>
-                                </Card>
-                                
-                                <div className="space-y-6">
-                                    <Card className="border border-red-900/30 bg-red-900/10 text-slate-300">
-                                        <CardHeader>
-                                            <CardTitle className="text-sm font-medium text-red-200">Fixing Error 11200</CardTitle>
-                                        </CardHeader>
-                                        <CardContent className="text-sm space-y-4">
-                                            <p className="text-slate-400">
-                                                <strong>Twilio Error 11200</strong> means "HTTP Retrieval Failure". Twilio cannot reach your Webhook URL.
-                                            </p>
-                                            <p className="text-slate-400">
-                                                <strong>Solution:</strong> Go to the "Backend Setup" tab, copy the updated code, deploy it to Supabase, and paste the <strong>new URL</strong> here.
-                                            </p>
-                                        </CardContent>
-                                    </Card>
+                    {/* TAB 3: Logs */}
+                    <TabsContent value="logs" className="flex-1 overflow-hidden m-0 bg-[#0c0c0c] text-white p-4 font-mono text-xs">
+                         <div className="h-full overflow-y-auto space-y-1">
+                            {logs.map((log, i) => (
+                                <div key={i} className="border-b border-white/5 pb-1">
+                                    <span className="text-slate-500 mr-3">{log.split(']')[0]}]</span>
+                                    <span className={cn(
+                                        log.includes('Error') ? "text-red-400" : 
+                                        log.includes('Realtime') ? "text-blue-400" : "text-green-400"
+                                    )}>
+                                        {log.split(']')[1]}
+                                    </span>
                                 </div>
-                            </div>
-                        </TabsContent>
-                        
-                        <TabsContent value="backend">
-                             <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
-                                <CardHeader>
-                                    <CardTitle>Supabase Backend Setup</CardTitle>
-                                    <CardDescription>Setup the database and edge function to receive real messages.</CardDescription>
-                                </CardHeader>
-                                <CardContent className="space-y-6">
-                                    <div className="space-y-2">
-                                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                                            Step 1: Create Table & Enable Realtime <span className="text-red-400 text-xs uppercase border border-red-500 px-1 rounded">Critical</span>
-                                        </h3>
-                                        <p className="text-xs text-slate-400">Run this SQL in your Supabase SQL Editor. <strong>You MUST run the `alter publication` line or chat updates won't appear.</strong></p>
-                                        <div className="relative">
-                                             <pre className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-blue-300 font-mono border border-slate-800">
-                                                <code>{sqlSnippet}</code>
-                                            </pre>
-                                            <Button size="sm" variant="secondary" className="absolute top-2 right-2 h-7 text-xs" onClick={() => navigator.clipboard.writeText(sqlSnippet)}>Copy SQL</Button>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <h3 className="text-sm font-bold text-white">Step 2: Deploy Edge Function</h3>
-                                        <p className="text-xs text-slate-400">
-                                            Create `supabase/functions/whatsapp/index.ts` and paste this code. Then deploy with: <br/>
-                                            <code className="text-slate-300">supabase functions deploy whatsapp --no-verify-jwt</code>
-                                        </p>
-                                        <div className="relative">
-                                            <pre className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-400 font-mono border border-slate-800 max-h-[300px]">
-                                                <code>{supabaseFunctionCode}</code>
-                                            </pre>
-                                            <Button size="sm" variant="secondary" className="absolute top-2 right-2 h-7 text-xs" onClick={() => navigator.clipboard.writeText(supabaseFunctionCode)}>Copy Code</Button>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </TabsContent>
-                    </Tabs>
-                ) : (
-                    // CONNECTED / DASHBOARD STATE
-                    <div className="grid gap-6 lg:grid-cols-12 h-[calc(100vh-200px)] min-h-[600px]">
-                        
-                        {/* LEFT COL: Connection Info */}
-                        <div className="lg:col-span-4 space-y-6 flex flex-col h-full overflow-y-auto pr-2">
-                            <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white shadow-md">
-                                <CardHeader className="pb-3">
-                                    <CardTitle className="text-sm uppercase tracking-wider text-slate-500 font-semibold">Live Webhook Status</CardTitle>
-                                </CardHeader>
-                                <CardContent className="space-y-4">
-                                    {webhookUrl ? (
-                                        <>
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] text-slate-500 uppercase font-bold">Current Endpoint</label>
-                                                <Input readOnly value={webhookUrl} className="h-9 text-xs bg-black border-slate-800 font-mono text-blue-300" />
-                                            </div>
-                                            <div className="pt-2 flex items-center justify-between gap-2 text-xs text-green-400 border-t border-slate-800">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                                                    Realtime Active
-                                                </div>
-                                                <Button size="sm" variant="ghost" onClick={fetchHistory} className="h-6 text-[10px] text-slate-400 hover:text-white border border-slate-700">
-                                                    Force Refresh
-                                                </Button>
-                                            </div>
-                                             <p className="text-xs text-slate-500 pt-1">
-                                                Real WhatsApp messages sent to your Twilio number will appear in the chat automatically.
-                                            </p>
-                                        </>
-                                    ) : (
-                                        <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-md text-xs text-yellow-200">
-                                            <strong>Simulator Mode Only</strong><br/>
-                                            No backend webhook configured. Real WhatsApp messages will not appear here. Use the chat input on the right to test logic.
-                                        </div>
-                                    )}
-                                </CardContent>
-                            </Card>
-
-                            <Card className="flex-1 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col min-h-[200px]">
-                                <CardHeader className="py-3 px-4 border-b border-slate-800">
-                                    <CardTitle className="text-xs font-mono uppercase text-slate-500">System Logs</CardTitle>
-                                </CardHeader>
-                                <CardContent className="flex-1 overflow-y-auto p-3 font-mono text-[11px] space-y-1.5 bg-black/40">
-                                    {logs.length === 0 && <span className="text-slate-600 italic">Logs will appear here...</span>}
-                                    {logs.map((log, i) => (
-                                        <div key={i} className="border-b border-slate-800/30 pb-1 break-all">
-                                            <span className="text-slate-500 mr-2">{log.split(']')[0]}]</span>
-                                            <span className={cn(
-                                                log.includes('Error') || log.includes('🔴') ? "text-red-400" :
-                                                log.includes('Webhook') ? "text-blue-400" :
-                                                log.includes('Realtime') || log.includes('🟢') ? "text-green-400" :
-                                                log.includes('Gemini') ? "text-purple-400" :
-                                                "text-slate-300"
-                                            )}>{log.split(']')[1]}</span>
-                                        </div>
-                                    ))}
-                                    <div ref={messagesEndRef} />
-                                </CardContent>
-                            </Card>
-                        </div>
-
-                        {/* RIGHT COL: Simulator / Live Chat */}
-                        <div className="lg:col-span-8 flex flex-col h-full">
-                            <Card className="h-full border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col overflow-hidden shadow-2xl">
-                                <CardHeader className="py-3 px-4 border-b border-slate-800 bg-slate-900/60 flex flex-row justify-between items-center shrink-0">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center">
-                                            <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.888.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.978zm11.374-10.213c-2.269-1.156-3.354-1.637-4.326-.775-.826.734-1.936 2.373-2.399 2.146-.666-.326-3.141-1.472-5.06-3.391-1.919-1.919-3.065-4.394-3.391-5.06-.227-.463 1.412-1.573 2.146-2.399.862-.972.381-2.057-.775-4.326-.887-1.742-1.258-1.947-1.706-1.968-.432-.02-3.102-.02-3.481 1.218-.328 1.071 1.259 6.255 7.152 12.148 5.893 5.893 11.077 7.48 12.148 7.152 1.238-.379 1.238-3.049 1.218-3.481-.021-.448-.226-.819-1.968-1.706z"/></svg>
-                                        </div>
-                                        <div>
-                                            <h3 className="font-semibold text-sm">Simulator & Live Preview</h3>
-                                            <p className="text-[10px] text-slate-400">Monitoring: {phoneNumber || 'Your Number'}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <Button size="sm" variant="ghost" className="h-7 text-xs border border-slate-700 hover:bg-slate-800" onClick={() => { setIsConfigured(false); }}>
-                                            Edit Config
-                                        </Button>
-                                    </div>
-                                </CardHeader>
-                                <CardContent className="flex-1 overflow-y-auto p-6 space-y-6 bg-[url('https://i.pinimg.com/originals/97/c0/07/97c00759d90d786d9b6096d274ad3e07.png')] bg-repeat bg-[length:400px]">
-                                    {messages.length === 0 && (
-                                        <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-3 opacity-80">
-                                            <div className="bg-slate-200/80 p-4 rounded-full">
-                                                <BotIcon className="h-8 w-8 text-slate-600" />
-                                            </div>
-                                            <p className="text-sm font-medium bg-white/80 px-4 py-1 rounded-full shadow-sm text-center">
-                                                Simulator Ready.<br/>
-                                                <span className="text-xs font-normal text-slate-500">
-                                                    {webhookUrl ? "Waiting for messages..." : "Send a message below to test your AI logic."}
-                                                </span>
-                                            </p>
-                                        </div>
-                                    )}
-                                    {messages.map(msg => (
-                                        <div key={msg.id} className={cn("flex w-full", msg.sender === 'bot' ? "justify-end" : "justify-start")}>
-                                            <div className={cn(
-                                                "max-w-[80%] rounded-lg px-3 py-2 text-sm shadow-sm whitespace-pre-wrap break-words relative",
-                                                msg.sender === 'bot' 
-                                                    ? "bg-[#d9fdd3] text-gray-900 rounded-tr-none"
-                                                    : msg.sender === 'system'
-                                                    ? "bg-red-100 border border-red-200 text-red-800 text-xs w-full text-center"
-                                                    : "bg-white text-gray-900 rounded-tl-none"
-                                            )}>
-                                                {msg.sender === 'user' && <span className="text-[10px] font-bold text-slate-500 block mb-1">Customer</span>}
-                                                {msg.sender === 'bot' && <span className="text-[10px] font-bold text-green-700 block mb-1">AI Agent</span>}
-                                                {msg.text}
-                                                <div className="flex justify-end items-center gap-1 mt-1">
-                                                    <span className="text-[10px] text-gray-500">{msg.timestamp}</span>
-                                                    {msg.sender === 'bot' && (
-                                                        <span className={cn("text-[10px]", 
-                                                            msg.status === 'read' ? "text-blue-500" : "text-gray-400"
-                                                        )}>
-                                                            {msg.status === 'read' ? '✓✓' : msg.status === 'delivered' ? '✓✓' : '✓'}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                    <div ref={messagesEndRef} />
-                                </CardContent>
-                                <CardFooter className="p-3 bg-[#f0f2f5] border-t border-slate-300 flex flex-col gap-2">
-                                    <div className="w-full text-xs text-center text-slate-400 font-medium">
-                                        Simulate Incoming Message (Test AI)
-                                    </div>
-                                    <form onSubmit={handleSendMessage} className="flex w-full gap-2 items-center">
-                                        <Button type="button" size="icon" variant="ghost" className="text-slate-500">
-                                            <PlusIcon className="h-6 w-6" />
-                                        </Button>
-                                        <div className="flex-1 relative">
-                                            <Input 
-                                                value={input} 
-                                                onChange={e => setInput(e.target.value)} 
-                                                placeholder="Type what a customer would say..." 
-                                                className="bg-white border-none focus-visible:ring-0 rounded-lg h-10 py-2 px-4 shadow-sm text-black placeholder:text-gray-500"
-                                            />
-                                        </div>
-                                        {input.trim() ? (
-                                            <Button type="submit" size="icon" className="bg-[#00a884] hover:bg-[#008f6f] h-10 w-10">
-                                                <SendIcon className="h-5 w-5 text-white" />
-                                            </Button>
-                                        ) : (
-                                            <Button type="button" size="icon" variant="ghost" className="text-slate-500">
-                                                 <MicIcon className="h-6 w-6" />
-                                            </Button>
-                                        )}
-                                    </form>
-                                </CardFooter>
-                            </Card>
-                        </div>
-                    </div>
-                )}
-             </div>
+                            ))}
+                            <div ref={messagesEndRef} />
+                         </div>
+                    </TabsContent>
+                </Tabs>
+            </div>
         </div>
     );
 };
 
 // --- Icons ---
-function BotIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 8V4H8" />
-      <rect width="16" height="12" x="4" y="8" rx="2" />
-      <path d="M2 14h2" />
-      <path d="M20 14h2" />
-      <path d="M15 13v2" />
-      <path d="M9 13v2" />
-    </svg>
-  )
+function ChatIcon(props: React.SVGProps<SVGSVGElement>) {
+    return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2v5Z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
 }
-
-function DatabaseIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <ellipse cx="12" cy="5" rx="9" ry="3" />
-            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-            <path d="M3 5v14c0 1.66 4 3 9 3s 9-1.34 9-3V5" />
-        </svg>
-    )
-}
-
 function SendIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="22" x2="11" y1="2" y2="13" />
-            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-        </svg>
-    )
+    return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
 }
-
-function EyeIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-            <circle cx="12" cy="12" r="3" />
-        </svg>
-    )
-}
-
-function EyeOffIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7c.44 0 .87-.03 1.28-.08" />
-            <line x1="2" x2="22" y1="2" y2="22" />
-        </svg>
-    )
-}
-
-function LockIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-    )
-}
-
-function PlusIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 12h14" />
-            <path d="M12 5v14" />
-        </svg>
-    )
-}
-
-function MicIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" x2="12" y1="19" y2="23" />
-            <line x1="8" x2="16" y1="23" y2="23" />
-        </svg>
-    )
+function CheckCircleIcon(props: React.SVGProps<SVGSVGElement>) {
+    return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
 }
 
 export default AIChatPage;
