@@ -7,6 +7,7 @@ import { Badge } from '../components/ui/Badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
 import { cn } from '../lib/utils';
 import { GoogleGenAI } from "@google/genai";
+import { supabase } from '../services/supabase';
 
 // Types for the simulator
 interface SimMessage {
@@ -64,6 +65,69 @@ const AIChatPage: React.FC = () => {
         }
     }, []);
 
+    // ------------------------------------------------------------------
+    // NEW: Realtime Subscription to Supabase
+    // ------------------------------------------------------------------
+    useEffect(() => {
+        if (!supabase) return;
+
+        // 1. Fetch recent history
+        const fetchHistory = async () => {
+            const { data, error } = await supabase
+                .from('messages')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(20);
+
+            if (data) {
+                const formatted: SimMessage[] = data.reverse().map((msg: any) => ({
+                    id: msg.id.toString(),
+                    text: msg.text,
+                    sender: msg.sender === 'user' ? 'user' : 'bot',
+                    timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    status: 'delivered'
+                }));
+                setMessages(prev => {
+                    // Avoid duplicates if switching views
+                    const newIds = new Set(formatted.map(m => m.id));
+                    const filteredPrev = prev.filter(m => !newIds.has(m.id) && m.sender === 'system');
+                    return [...filteredPrev, ...formatted];
+                });
+            }
+        };
+
+        if (webhookUrl) {
+            fetchHistory();
+        }
+
+        // 2. Subscribe to new messages
+        const channel = supabase
+            .channel('public:messages')
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'messages' },
+                (payload) => {
+                    const newMsg = payload.new;
+                    addLog(`Realtime: New message from ${newMsg.phone || 'Unknown'}`);
+                    
+                    const formattedMsg: SimMessage = {
+                        id: newMsg.id.toString(),
+                        text: newMsg.text,
+                        sender: newMsg.sender === 'user' ? 'user' : 'bot',
+                        timestamp: new Date(newMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        status: 'delivered'
+                    };
+                    
+                    setMessages(prev => [...prev, formattedMsg]);
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [webhookUrl]);
+
     // Auto-scroll chat
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -77,14 +141,12 @@ const AIChatPage: React.FC = () => {
     const checkWebhookReachability = async () => {
         if (!webhookUrl) return;
         
-        // 1. Check for localhost (common mistake)
         if (webhookUrl.includes("localhost") || webhookUrl.includes("127.0.0.1")) {
              setWebhookStatus('error');
-             addLog('Error: "localhost" is not reachable by Twilio. Use a public URL (e.g. Supabase, Ngrok).');
+             addLog('Error: "localhost" is not reachable by Twilio. Use a public URL (Supabase).');
              return;
         }
 
-        // 2. Check for placeholder
         if (webhookUrl.includes("api.inshoppe.ai")) {
              setWebhookStatus('error');
              addLog('Error: "api.inshoppe.ai" is a placeholder. Deploy the backend code first.');
@@ -95,7 +157,6 @@ const AIChatPage: React.FC = () => {
         addLog(`System: Pinging ${webhookUrl}...`);
         
         try {
-            // We verify by sending a dummy POST. 
             const res = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -119,8 +180,6 @@ const AIChatPage: React.FC = () => {
     const handleSaveConfig = (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        
-        // Simulate validating credentials
         setTimeout(() => {
             localStorage.setItem('twilio_user_config', JSON.stringify({
                 accountSid, authToken, phoneNumber, systemInstruction, knowledgeBase, webhookUrl
@@ -129,9 +188,9 @@ const AIChatPage: React.FC = () => {
             setIsConfigured(true);
             addLog('System: Configuration saved.');
             if (webhookUrl) {
-                addLog(`System: Registered Webhook: ${webhookUrl}`);
+                addLog(`System: Live Mode Active. Listening to Database...`);
             } else {
-                 addLog(`System: No backend Webhook URL configured. Simulation Mode active.`);
+                 addLog(`System: Simulation Mode active.`);
             }
         }, 1000);
     };
@@ -158,16 +217,12 @@ const AIChatPage: React.FC = () => {
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         
-        addLog(`Webhook (Simulated): Incoming from Customer -> ${phoneNumber}`);
-        addLog(`Payload: { Body: "${userMsg.text}" }`);
+        addLog(`Simulator: Sending "${userMsg.text}"`);
         
         // 2. AI Processing
-        addLog(`AI Processing: Embedding query...`);
         await new Promise(resolve => setTimeout(resolve, 800)); 
         
         try {
-            // NOTE: In production, this call happens on your server (Supabase Edge Function)
-            // We do it client-side here ONLY for simulation/testing purposes.
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             
             const ragPrompt = `
@@ -186,7 +241,6 @@ const AIChatPage: React.FC = () => {
             const replyText = response.text || "I'm having trouble thinking right now.";
 
             addLog(`Gemini AI: Generated response.`);
-            addLog(`Twilio API: POST /Messages.json`);
 
             const botMsg: SimMessage = {
                 id: (Date.now() + 1).toString(),
@@ -197,10 +251,6 @@ const AIChatPage: React.FC = () => {
             };
             
             setMessages(prev => [...prev, botMsg]);
-            
-            setTimeout(() => {
-                setMessages(prev => prev.map(m => m.id === botMsg.id ? { ...m, status: 'delivered' } : m));
-            }, 1000);
 
         } catch (error) {
             console.error("AI Error:", error);
@@ -208,19 +258,18 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // The code snippet to display for Supabase Edge Functions
     const supabaseFunctionCode = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-// 0. Setup CORS Headers (Required for Browser Testing)
+// 0. Setup CORS Headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
 serve(async (req) => {
-  // 1. Handle CORS Preflight Request
+  // 1. Handle CORS Preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -238,15 +287,15 @@ serve(async (req) => {
       const From = formData.get('From')?.toString() || '';
       const AccountSid = formData.get('AccountSid')?.toString();
 
+      // Return 200 OK for Ping tests (empty body)
       if (!Body) {
-          // Respond with 200 OK for ping tests
           return new Response('Ping Received', { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/plain' } });
       }
 
       console.log(\`Received from \${From}: \${Body}\`);
 
-      // 4. Store in Database (triggers Realtime updates)
-      await supabase
+      // 4. Store in Database (Frontend Listens to this table!)
+      const { error } = await supabase
         .from('messages')
         .insert([{ 
             text: Body, 
@@ -255,10 +304,11 @@ serve(async (req) => {
             metadata: { twilio_sid: AccountSid }
         }])
 
-      // 5. Call AI (Gemini) here OR trigger another function
-      // ... Add your Gemini logic here ...
+      if (error) console.error('DB Insert Error:', error);
 
-      // 6. Respond to Twilio (TwiML)
+      // 5. Call AI logic here (omitted for brevity)
+
+      // 6. Respond to Twilio
       return new Response('<Response></Response>', {
         headers: { "Content-Type": "text/xml", ...corsHeaders },
       });
@@ -266,6 +316,21 @@ serve(async (req) => {
       return new Response(String(err), { status: 500, headers: corsHeaders })
   }
 })`;
+
+    const sqlSnippet = `
+-- Run this in your Supabase SQL Editor
+create table messages (
+  id bigint generated by default as identity primary key,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  text text,
+  sender text, -- 'user' or 'bot'
+  phone text,
+  metadata jsonb
+);
+
+-- Enable Realtime
+alter publication supabase_realtime add table messages;
+`;
 
     return (
         <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
@@ -279,7 +344,7 @@ serve(async (req) => {
                     {isConfigured && (
                         <div className="flex items-center gap-2">
                              <Badge className={cn("px-3 py-1", webhookUrl && webhookStatus !== 'error' ? "bg-green-500/20 text-green-400 border-green-500/50" : "bg-yellow-500/20 text-yellow-400 border-yellow-500/50")}>
-                                {webhookUrl ? "● Live Backend Configured" : "○ Simulation Mode"}
+                                {webhookUrl ? "● Live Backend Connected" : "○ Simulation Only"}
                             </Badge>
                             <Button variant="destructive" onClick={handleDisconnect} size="sm" className="ml-2">Edit Config</Button>
                         </div>
@@ -304,7 +369,6 @@ serve(async (req) => {
                                     </CardHeader>
                                     <form onSubmit={handleSaveConfig}>
                                         <CardContent className="space-y-6">
-                                            {/* Twilio Inputs */}
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                                 <div className="space-y-2">
                                                     <label className="text-sm font-medium">Account SID <span className="text-red-400">*</span></label>
@@ -321,7 +385,6 @@ serve(async (req) => {
                                                 </div>
                                             </div>
 
-                                            {/* Webhook Input */}
                                             <div className="space-y-2">
                                                 <div className="flex justify-between items-center">
                                                     <label className="text-sm font-medium flex items-center gap-2">
@@ -397,10 +460,7 @@ serve(async (req) => {
                                                 <strong>Twilio Error 11200</strong> means "HTTP Retrieval Failure". Twilio cannot reach your Webhook URL.
                                             </p>
                                             <p className="text-slate-400">
-                                                <strong>Cause:</strong> You are likely using a placeholder URL or localhost which isn't public.
-                                            </p>
-                                            <p className="text-slate-400">
-                                                <strong>Solution:</strong> Go to the "Backend Setup" tab, copy the updated code (with CORS support), deploy it to Supabase, and paste the <strong>new URL</strong> here.
+                                                <strong>Solution:</strong> Go to the "Backend Setup" tab, copy the updated code, deploy it to Supabase, and paste the <strong>new URL</strong> here.
                                             </p>
                                         </CardContent>
                                     </Card>
@@ -411,21 +471,33 @@ serve(async (req) => {
                         <TabsContent value="backend">
                              <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
                                 <CardHeader>
-                                    <CardTitle>Supabase Edge Function</CardTitle>
-                                    <CardDescription>Deploy this code to Supabase to handle incoming Twilio webhooks.</CardDescription>
+                                    <CardTitle>Supabase Backend Setup</CardTitle>
+                                    <CardDescription>Setup the database and edge function to receive real messages.</CardDescription>
                                 </CardHeader>
-                                <CardContent className="space-y-4">
-                                    <p className="text-sm text-slate-400">
-                                        1. Create a new function: <code>supabase functions new whatsapp</code><br/>
-                                        2. Paste the code below into <code>index.ts</code><br/>
-                                        3. Deploy: <code>supabase functions deploy whatsapp --no-verify-jwt</code><br/>
-                                        4. Use the deployed URL as your Webhook URL.
-                                    </p>
-                                    <div className="relative">
-                                        <pre className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-400 font-mono border border-slate-800 max-h-[400px]">
-                                            <code>{supabaseFunctionCode}</code>
-                                        </pre>
-                                        <Button size="sm" variant="secondary" className="absolute top-2 right-2" onClick={() => navigator.clipboard.writeText(supabaseFunctionCode)}>Copy Code</Button>
+                                <CardContent className="space-y-6">
+                                    <div className="space-y-2">
+                                        <h3 className="text-sm font-bold text-white">Step 1: Create Database Table</h3>
+                                        <p className="text-xs text-slate-400">Run this SQL in your Supabase SQL Editor to create the message store.</p>
+                                        <div className="relative">
+                                             <pre className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-blue-300 font-mono border border-slate-800">
+                                                <code>{sqlSnippet}</code>
+                                            </pre>
+                                            <Button size="sm" variant="secondary" className="absolute top-2 right-2 h-7 text-xs" onClick={() => navigator.clipboard.writeText(sqlSnippet)}>Copy SQL</Button>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <h3 className="text-sm font-bold text-white">Step 2: Deploy Edge Function</h3>
+                                        <p className="text-xs text-slate-400">
+                                            Create `supabase/functions/whatsapp/index.ts` and paste this code. Then deploy with: <br/>
+                                            <code className="text-slate-300">supabase functions deploy whatsapp --no-verify-jwt</code>
+                                        </p>
+                                        <div className="relative">
+                                            <pre className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-400 font-mono border border-slate-800 max-h-[300px]">
+                                                <code>{supabaseFunctionCode}</code>
+                                            </pre>
+                                            <Button size="sm" variant="secondary" className="absolute top-2 right-2 h-7 text-xs" onClick={() => navigator.clipboard.writeText(supabaseFunctionCode)}>Copy Code</Button>
+                                        </div>
                                     </div>
                                 </CardContent>
                             </Card>
@@ -450,10 +522,10 @@ serve(async (req) => {
                                             </div>
                                             <div className="pt-2 flex items-center gap-2 text-xs text-green-400">
                                                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                                                Listening for POST requests...
+                                                Listening for Realtime updates...
                                             </div>
                                              <p className="text-xs text-slate-500 pt-2 border-t border-slate-800">
-                                                Check <a href="https://console.twilio.com/us1/monitor/logs/debugger" target="_blank" className="text-blue-400 hover:underline">Twilio Debugger</a> if messages fail to arrive.
+                                                Real WhatsApp messages sent to your Twilio number will appear in the chat on the right automatically.
                                             </p>
                                         </>
                                     ) : (
@@ -487,7 +559,7 @@ serve(async (req) => {
                             </Card>
                         </div>
 
-                        {/* RIGHT COL: Simulator */}
+                        {/* RIGHT COL: Simulator / Live Chat */}
                         <div className="lg:col-span-8 flex flex-col h-full">
                             <Card className="h-full border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white flex flex-col overflow-hidden shadow-2xl">
                                 <CardHeader className="py-3 px-4 border-b border-slate-800 bg-slate-900/60 flex flex-row justify-between items-center shrink-0">
@@ -496,7 +568,7 @@ serve(async (req) => {
                                             <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.888.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.978zm11.374-10.213c-2.269-1.156-3.354-1.637-4.326-.775-.826.734-1.936 2.373-2.399 2.146-.666-.326-3.141-1.472-5.06-3.391-1.919-1.919-3.065-4.394-3.391-5.06-.227-.463 1.412-1.573 2.146-2.399.862-.972.381-2.057-.775-4.326-.887-1.742-1.258-1.947-1.706-1.968-.432-.02-3.102-.02-3.481 1.218-.328 1.071 1.259 6.255 7.152 12.148 5.893 5.893 11.077 7.48 12.148 7.152 1.238-.379 1.238-3.049 1.218-3.481-.021-.448-.226-.819-1.968-1.706z"/></svg>
                                         </div>
                                         <div>
-                                            <h3 className="font-semibold text-sm">Simulator & Preview</h3>
+                                            <h3 className="font-semibold text-sm">Simulator & Live Preview</h3>
                                             <p className="text-[10px] text-slate-400">Monitoring: {phoneNumber || 'Your Number'}</p>
                                         </div>
                                     </div>
@@ -514,7 +586,9 @@ serve(async (req) => {
                                             </div>
                                             <p className="text-sm font-medium bg-white/80 px-4 py-1 rounded-full shadow-sm text-center">
                                                 Simulator Ready.<br/>
-                                                <span className="text-xs font-normal text-slate-500">Send a message below to test your AI logic logic immediately.</span>
+                                                <span className="text-xs font-normal text-slate-500">
+                                                    {webhookUrl ? "Waiting for messages..." : "Send a message below to test your AI logic."}
+                                                </span>
                                             </p>
                                         </div>
                                     )}
