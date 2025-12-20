@@ -20,12 +20,14 @@ interface SimMessage {
   status?: 'sent' | 'delivered' | 'read';
 }
 
+type ViewMode = 'landing' | 'setup' | 'dashboard';
+
 const AIChatPage: React.FC = () => {
+    // --- View State ---
+    const [mode, setMode] = useState<ViewMode>('landing');
+    
     // --- State: Configuration ---
-    const [isConfigured, setIsConfigured] = useState(false);
-    const [isEditingConfig, setIsEditingConfig] = useState(false);
     const [loading, setLoading] = useState(false);
-    const [showToken, setShowToken] = useState(false);
     
     // --- State: Credentials ---
     const [accountSid, setAccountSid] = useState('');
@@ -85,15 +87,18 @@ const AIChatPage: React.FC = () => {
             if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
             if (parsed.knowledgeBase) setKnowledgeBase(parsed.knowledgeBase);
             
+            // Only jump straight to dashboard if fully configured
             if (parsed.accountSid && parsed.authToken) {
-                setIsConfigured(true);
+                setMode('dashboard');
+            } else {
+                setMode('landing');
             }
         }
     }, []);
 
     // --- Effect: Realtime Subscription ---
     useEffect(() => {
-        if (!supabase) return;
+        if (!supabase || mode !== 'dashboard') return;
 
         // 1. Initial Fetch
         const fetchHistory = async () => {
@@ -114,7 +119,6 @@ const AIChatPage: React.FC = () => {
                     status: 'delivered'
                 }));
                 setMessages(prev => {
-                    // Deduplicate based on ID
                     const existingIds = new Set(prev.map(p => p.id));
                     const newMsgs = formatted.filter(f => !existingIds.has(f.id));
                     return [...prev, ...newMsgs];
@@ -122,7 +126,7 @@ const AIChatPage: React.FC = () => {
             }
         };
 
-        if (webhookUrl || isConfigured) fetchHistory();
+        if (webhookUrl) fetchHistory();
 
         // 2. Subscribe
         const channel = supabase
@@ -155,12 +159,12 @@ const AIChatPage: React.FC = () => {
             .subscribe();
 
         return () => { supabase.removeChannel(channel); };
-    }, [isConfigured, webhookUrl]);
+    }, [mode, webhookUrl]);
 
     // --- Auto Scroll ---
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, selectedPhone]);
+    }, [messages, selectedPhone, mode]);
 
     // --- Helpers ---
     const addLog = (text: string) => {
@@ -176,8 +180,7 @@ const AIChatPage: React.FC = () => {
                 accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, knowledgeBase, webhookUrl
             }));
             setLoading(false);
-            setIsConfigured(true);
-            setIsEditingConfig(false);
+            setMode('dashboard');
             addLog('System: Configuration saved.');
         }, 800);
     };
@@ -214,7 +217,6 @@ const AIChatPage: React.FC = () => {
         
         const targetPhone = selectedPhone || '+60123456789';
 
-        // 1. User Message
         const userMsg: SimMessage = {
             id: Date.now().toString(),
             text: input,
@@ -227,7 +229,6 @@ const AIChatPage: React.FC = () => {
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         
-        // 2. AI Processing
         await new Promise(resolve => setTimeout(resolve, 800)); 
         
         try {
@@ -265,52 +266,87 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // --- Views ---
-
-    // 1. Not Configured / Setup View
-    if (!isConfigured || isEditingConfig) {
+    // --- RENDER 1: Landing View ---
+    if (mode === 'landing') {
         return (
-            <div className="h-full overflow-y-auto p-4 lg:p-6">
-                <div className="max-w-3xl mx-auto space-y-6">
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-slate-950/50">
+                <div className="w-full max-w-lg space-y-8 animate-fadeInUp">
+                    <div className="flex justify-center">
+                        <div className="w-24 h-24 bg-gradient-to-tr from-slate-800 to-slate-900 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-900/20 border border-slate-700">
+                             <ChatIcon className="w-12 h-12 text-blue-400" />
+                        </div>
+                    </div>
+                    
+                    <div className="space-y-4">
+                        <h2 className="text-4xl font-bold text-white tracking-tight">WhatsApp AI Integration</h2>
+                        <p className="text-slate-400 text-lg leading-relaxed">
+                            Connect your Twilio account to enable the AI Action Engine. 
+                            Automate replies, capture leads, and manage bookings directly from WhatsApp.
+                        </p>
+                    </div>
+
+                    <div className="pt-4 flex flex-col gap-4 items-center">
+                        <Button 
+                            size="lg" 
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-10 h-12 text-base shadow-lg shadow-blue-900/40 w-full sm:w-auto" 
+                            onClick={() => setMode('setup')}
+                        >
+                            Connect WhatsApp
+                        </Button>
+                        <p className="text-xs text-slate-500">
+                            Takes about 2 minutes to setup credentials
+                        </p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // --- RENDER 2: Setup View ---
+    if (mode === 'setup') {
+        return (
+            <div className="h-full overflow-y-auto p-4 lg:p-6 bg-slate-950/50">
+                <div className="max-w-3xl mx-auto space-y-6 animate-fadeInUp">
                     <div className="flex items-center justify-between">
                         <div>
-                            <h1 className="text-3xl font-bold text-white">Twilio Integration Setup</h1>
-                            <p className="text-slate-400">Connect your WhatsApp Number to enable AI automation.</p>
+                            <h1 className="text-3xl font-bold text-white">Twilio Configuration</h1>
+                            <p className="text-slate-400">Enter your credentials to link your number.</p>
                         </div>
-                        {isConfigured && (
-                            <Button variant="ghost" onClick={() => setIsEditingConfig(false)}>Cancel</Button>
-                        )}
+                        <Button variant="ghost" onClick={() => setMode('landing')} className="text-slate-400 hover:text-white">
+                            Cancel
+                        </Button>
                     </div>
                     
                     <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
                         <form onSubmit={handleSaveConfig}>
                             <CardHeader>
-                                <CardTitle>Credentials & Configuration</CardTitle>
+                                <CardTitle>Connection Details</CardTitle>
+                                <CardDescription>Found in your Twilio Console Dashboard.</CardDescription>
                             </CardHeader>
                             <CardContent className="space-y-6">
                                 <div className="grid md:grid-cols-2 gap-6">
                                     <div className="space-y-2">
                                         <label className="text-sm font-medium">Account SID</label>
-                                        <Input required value={accountSid} onChange={e => setAccountSid(e.target.value)} className="bg-slate-950/50 border-slate-700" placeholder="AC..." />
+                                        <Input required value={accountSid} onChange={e => setAccountSid(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" placeholder="AC..." />
                                     </div>
                                     <div className="space-y-2">
                                         <label className="text-sm font-medium">Auth Token</label>
-                                        <Input type="password" required value={authToken} onChange={e => setAuthToken(e.target.value)} className="bg-slate-950/50 border-slate-700" placeholder="Token..." />
+                                        <Input type="password" required value={authToken} onChange={e => setAuthToken(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" placeholder="Token..." />
                                     </div>
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium">Webhook URL (Optional for Sim)</label>
-                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 text-blue-300" placeholder="https://..." />
-                                    <p className="text-xs text-slate-500">Leaving this blank enables Simulator Mode only.</p>
+                                    <label className="text-sm font-medium">Webhook URL (Optional for Simulator)</label>
+                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 text-blue-300 font-mono" placeholder="https://..." />
+                                    <p className="text-xs text-slate-500">Leave blank to use internal Simulator only.</p>
                                 </div>
                                 <div className="grid md:grid-cols-2 gap-6 pt-4 border-t border-slate-800">
                                     <div className="space-y-2">
-                                        <label className="text-sm font-medium">System Instructions</label>
-                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-2 text-sm h-24" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} />
+                                        <label className="text-sm font-medium">System Instructions (AI Personality)</label>
+                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} placeholder="You are a helpful assistant..." />
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="text-sm font-medium">Knowledge Base</label>
-                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-2 text-sm h-24" value={knowledgeBase} onChange={e => setKnowledgeBase(e.target.value)} />
+                                        <label className="text-sm font-medium">Knowledge Base (Product Info)</label>
+                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500" value={knowledgeBase} onChange={e => setKnowledgeBase(e.target.value)} placeholder="Price list, policies, etc..." />
                                     </div>
                                 </div>
                             </CardContent>
@@ -326,7 +362,7 @@ const AIChatPage: React.FC = () => {
         );
     }
 
-    // 2. Connected / Main View
+    // --- RENDER 3: Dashboard View (Main) ---
     return (
         <div className="h-full flex flex-col overflow-hidden bg-slate-950">
             {/* Header */}
@@ -338,8 +374,8 @@ const AIChatPage: React.FC = () => {
                         {webhookUrl ? 'Live Backend' : 'Simulator Mode'}
                     </Badge>
                 </div>
-                <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setIsEditingConfig(true)}>
-                    Settings
+                <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setMode('setup')}>
+                    Config
                 </Button>
             </header>
 
