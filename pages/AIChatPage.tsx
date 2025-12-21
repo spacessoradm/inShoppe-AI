@@ -215,34 +215,39 @@ const AIChatPage: React.FC = () => {
         e.preventDefault();
         setLoading(true);
 
-        // 1. Save to Local Storage (Client preference)
-        localStorage.setItem('twilio_user_config', JSON.stringify({
-            accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
-        }));
+        try {
+            // 1. Save to Local Storage (Client preference)
+            localStorage.setItem('twilio_user_config', JSON.stringify({
+                accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
+            }));
 
-        // 2. Save Phone Mapping to Supabase Profile (Server persistence)
-        if (supabase && user && myPhoneNumber) {
-             try {
+            // 2. Save Phone Mapping to Supabase Profile (Server persistence)
+            if (supabase && user && myPhoneNumber) {
                 const { error } = await supabase
                     .from('profiles')
                     .update({ twilio_phone_number: myPhoneNumber })
                     .eq('id', user.id);
                 
                 if (error) {
-                    addLog(`Error: Failed to link phone number to profile: ${error.message}`);
+                    addLog(`Error: Failed to link phone number: ${error.message}`);
+                    console.error("Profile update failed", error);
                 } else {
                     addLog('System: Phone number linked to User Profile.');
                 }
-             } catch (err) {
-                 console.error("Profile update failed", err);
-             }
+            } else if (!supabase) {
+                addLog('System: Supabase disconnected. Saved locally only.');
+            }
+        } catch (err: any) {
+             console.error("Config save failed", err);
+             addLog(`Error: ${err.message || 'Unknown error during save'}`);
+        } finally {
+            // Always transition to dashboard, even if API fails or times out
+            setTimeout(() => {
+                setLoading(false);
+                setMode('dashboard');
+                addLog('System: Configuration saved.');
+            }, 800);
         }
-
-        setTimeout(() => {
-            setLoading(false);
-            setMode('dashboard');
-            addLog('System: Configuration saved.');
-        }, 800);
     };
 
     // --- Knowledge Base Logic (RAG) ---
