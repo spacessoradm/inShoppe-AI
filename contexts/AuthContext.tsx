@@ -339,8 +339,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(null);
         setOrganization(null);
         setProfile(null);
+        
+        // Clear app specific keys
         localStorage.removeItem(PROFILE_KEY); 
         localStorage.removeItem(ORG_KEY);
+
+        // AGGRESSIVE CLEANUP: Clear Supabase session tokens from localStorage
+        // This ensures that even if the network signOut failed, the local session is dead.
+        Object.keys(localStorage).forEach(key => {
+            if (key.startsWith('sb-') || key.includes('supabase')) {
+                localStorage.removeItem(key);
+            }
+        });
     }
   };
   
