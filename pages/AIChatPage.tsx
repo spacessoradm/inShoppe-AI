@@ -20,6 +20,12 @@ interface SimMessage {
   status?: 'sent' | 'delivered' | 'read';
 }
 
+interface KnowledgeItem {
+    id: number;
+    content: string;
+    similarity?: number;
+}
+
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
 const AIChatPage: React.FC = () => {
@@ -40,12 +46,14 @@ const AIChatPage: React.FC = () => {
     
     // --- State: AI ---
     const [systemInstruction, setSystemInstruction] = useState(
-        "You are inShoppe AI, a polite sales assistant. Keep answers concise."
-    );
-    const [knowledgeBase, setKnowledgeBase] = useState(
-        "Product: ProBuds X\nPrice: RM299\nStock: Available"
+        "You are inShoppe AI, a polite sales assistant. Use the provided Context to answer user questions accurately. If the answer isn't in the context, politely say you don't know."
     );
 
+    // --- State: Knowledge Base ---
+    const [knowledgeInput, setKnowledgeInput] = useState('');
+    const [isEmbedding, setIsEmbedding] = useState(false);
+    const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+    
     // --- State: Data ---
     const [messages, setMessages] = useState<SimMessage[]>([]);
     const [logs, setLogs] = useState<string[]>([]);
@@ -53,13 +61,13 @@ const AIChatPage: React.FC = () => {
     const [input, setInput] = useState('');
     
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // --- Derived State: Group Messages by Phone ---
     const chats = useMemo(() => {
         const groups: Record<string, SimMessage[]> = {};
         
         messages.forEach(msg => {
-            // Ignore system messages for the chat grouping unless they have a phone attached
             const key = msg.phone || 'System Logs';
             if (msg.sender === 'system' && key === 'System Logs') return;
             
@@ -67,7 +75,6 @@ const AIChatPage: React.FC = () => {
             groups[key].push(msg);
         });
         
-        // Sort keys by latest message timestamp
         return Object.entries(groups).sort(([, a], [, b]) => {
             const lastA = a[a.length - 1].fullTimestamp;
             const lastB = b[b.length - 1].fullTimestamp;
@@ -85,11 +92,10 @@ const AIChatPage: React.FC = () => {
             setMyPhoneNumber(parsed.phoneNumber || '');
             setWebhookUrl(parsed.webhookUrl || '');
             if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
-            if (parsed.knowledgeBase) setKnowledgeBase(parsed.knowledgeBase);
             
-            // Only jump straight to dashboard if fully configured
             if (parsed.accountSid && parsed.authToken) {
                 setMode('dashboard');
+                fetchKnowledgeBase(); // Load existing knowledge
             } else {
                 setMode('landing');
             }
@@ -100,9 +106,8 @@ const AIChatPage: React.FC = () => {
     useEffect(() => {
         if (!supabase || mode !== 'dashboard') return;
 
-        // 1. Initial Fetch
         const fetchHistory = async () => {
-            const { data, error } = await supabase
+            const { data } = await supabase
                 .from('messages')
                 .select('*')
                 .order('created_at', { ascending: false })
@@ -128,7 +133,6 @@ const AIChatPage: React.FC = () => {
 
         if (webhookUrl) fetchHistory();
 
-        // 2. Subscribe
         const channel = supabase
             .channel('chat-updates')
             .on(
@@ -150,7 +154,6 @@ const AIChatPage: React.FC = () => {
                     
                     setMessages(prev => [...prev, formattedMsg]);
                     
-                    // Auto-select this phone if none selected
                     if (!selectedPhone) {
                         setSelectedPhone(newMsg.phone);
                     }
@@ -177,7 +180,7 @@ const AIChatPage: React.FC = () => {
         setLoading(true);
         setTimeout(() => {
             localStorage.setItem('twilio_user_config', JSON.stringify({
-                accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, knowledgeBase, webhookUrl
+                accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
             }));
             setLoading(false);
             setMode('dashboard');
@@ -185,32 +188,72 @@ const AIChatPage: React.FC = () => {
         }, 800);
     };
 
-    const checkWebhookReachability = async () => {
-        if (!webhookUrl) return;
-        setWebhookStatus('checking');
-        addLog(`System: Pinging ${webhookUrl}...`);
-        
+    // --- Knowledge Base Logic (RAG) ---
+    
+    const fetchKnowledgeBase = async () => {
+        if (!supabase) return;
+        const { data } = await supabase.from('knowledge').select('id, content').limit(20);
+        if (data) setKnowledgeItems(data);
+    };
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (file.type === 'application/pdf' || file.type.includes('word')) {
+            alert("For this demo, please copy-paste text from your PDF/Word doc. In production, we would use a server-side parser.");
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            const text = event.target?.result as string;
+            setKnowledgeInput(text);
+            addLog(`System: Loaded ${file.name} (${text.length} chars). Ready to add to Knowledge Base.`);
+        };
+        reader.readAsText(file);
+    };
+
+    const addKnowledge = async () => {
+        if (!knowledgeInput.trim() || !supabase) return;
+        setIsEmbedding(true);
+        addLog("System: Vectorizing content (generating embeddings)...");
+
         try {
-            const res = await fetch(webhookUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ Body: 'PingTest', From: 'SystemCheck' })
-            });
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             
-            if (res.ok || res.status === 200) {
-                setWebhookStatus('success');
-                addLog('System: Webhook Reachable (200 OK).');
-            } else {
-                setWebhookStatus('error');
-                addLog(`Error: Webhook returned ${res.status}.`);
+            // 1. Generate Embedding
+            const embeddingResult = await ai.models.embedContent({
+                model: "text-embedding-004",
+                contents: knowledgeInput,
+            });
+            const embedding = embeddingResult.embeddings?.[0]?.values;
+
+            if (!embedding) throw new Error("Failed to generate embedding");
+
+            // 2. Store in Supabase
+            const { error } = await supabase.from('knowledge').insert({
+                content: knowledgeInput,
+                embedding: embedding
+            });
+
+            if (error) throw error;
+
+            addLog("System: Knowledge saved to Vector DB.");
+            setKnowledgeInput('');
+            fetchKnowledgeBase();
+
+        } catch (err: any) {
+            addLog(`Error: ${err.message}`);
+            if (err.message.includes("relation \"knowledge\" does not exist")) {
+                 alert("Please run the SQL script in the 'Webhook Status' tab to create the knowledge table.");
             }
-        } catch (e) {
-            setWebhookStatus('error');
-            addLog('Error: Connection failed (CORS or Network).');
+        } finally {
+            setIsEmbedding(false);
         }
     };
 
-    // --- Simulator Send ---
+    // --- AI RAG Logic ---
     const handleSimulatorSend = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!input.trim()) return;
@@ -229,16 +272,48 @@ const AIChatPage: React.FC = () => {
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         
-        await new Promise(resolve => setTimeout(resolve, 800)); 
+        await new Promise(resolve => setTimeout(resolve, 500)); 
         
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            
+            // 1. Semantic Search (RAG)
+            let contextText = "No specific knowledge found.";
+            
+            if (supabase) {
+                // Embed the query
+                const embeddingResult = await ai.models.embedContent({
+                    model: "text-embedding-004",
+                    contents: userMsg.text,
+                });
+
+                const queryEmbedding = embeddingResult.embeddings?.[0]?.values;
+                
+                if (queryEmbedding) {
+                    // Search DB
+                    const { data: searchResults, error } = await supabase.rpc('match_knowledge', {
+                        query_embedding: queryEmbedding,
+                        match_threshold: 0.5, // Similarity threshold
+                        match_count: 3
+                    });
+
+                    if (searchResults && searchResults.length > 0) {
+                        addLog(`System: Found ${searchResults.length} relevant knowledge chunks.`);
+                        contextText = searchResults.map((r: any) => r.content).join("\n---\n");
+                    }
+                }
+            }
+
+            // 2. Generate Answer
             const ragPrompt = `
-            You are an AI assistant.
-            CONTEXT: ${knowledgeBase}
-            RULES: ${systemInstruction}
-            QUERY: ${userMsg.text}
-            Answer concisely.
+            SYSTEM: ${systemInstruction}
+            
+            CONTEXT FROM KNOWLEDGE BASE:
+            ${contextText}
+
+            USER QUERY: ${userMsg.text}
+            
+            ANSWER:
             `;
 
             const response = await ai.models.generateContent({
@@ -247,7 +322,6 @@ const AIChatPage: React.FC = () => {
             });
 
             const replyText = response.text || "Thinking...";
-            addLog(`Gemini AI: Generated response for ${targetPhone}`);
 
             const botMsg: SimMessage = {
                 id: (Date.now() + 1).toString(),
@@ -262,7 +336,19 @@ const AIChatPage: React.FC = () => {
             setMessages(prev => [...prev, botMsg]);
 
         } catch (error) {
+            console.error(error);
             addLog(`Error: AI Engine failed.`);
+        }
+    };
+
+    const checkWebhookReachability = async () => {
+        if (!webhookUrl) return;
+        setWebhookStatus('checking');
+        try {
+            await fetch(webhookUrl, { method: 'POST', body: JSON.stringify({ type: 'ping' }), mode: 'no-cors' });
+            setWebhookStatus('success');
+        } catch (e) {
+            setWebhookStatus('error');
         }
     };
 
@@ -339,15 +425,9 @@ const AIChatPage: React.FC = () => {
                                     <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 text-blue-300 font-mono" placeholder="https://..." />
                                     <p className="text-xs text-slate-500">Leave blank to use internal Simulator only.</p>
                                 </div>
-                                <div className="grid md:grid-cols-2 gap-6 pt-4 border-t border-slate-800">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">System Instructions (AI Personality)</label>
-                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} placeholder="You are a helpful assistant..." />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">Knowledge Base (Product Info)</label>
-                                        <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500" value={knowledgeBase} onChange={e => setKnowledgeBase(e.target.value)} placeholder="Price list, policies, etc..." />
-                                    </div>
+                                <div className="space-y-2 pt-4 border-t border-slate-800">
+                                    <label className="text-sm font-medium">System Instructions (AI Personality)</label>
+                                    <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} placeholder="You are a helpful assistant..." />
                                 </div>
                             </CardContent>
                             <CardFooter>
@@ -381,11 +461,14 @@ const AIChatPage: React.FC = () => {
 
             {/* Tabs Content */}
             <div className="flex-1 overflow-hidden">
-                <Tabs defaultValue="chat" className="h-full flex flex-col">
+                <Tabs defaultValue="knowledge" className="h-full flex flex-col">
                     <div className="px-4 pt-2 bg-slate-900/50 border-b border-slate-800 shrink-0">
                          <TabsList className="bg-transparent gap-4">
                             <TabsTrigger value="chat" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">
                                 Live Chats
+                            </TabsTrigger>
+                            <TabsTrigger value="knowledge" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">
+                                Knowledge Base (RAG)
                             </TabsTrigger>
                             <TabsTrigger value="status" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">
                                 Webhook Status
@@ -486,7 +569,74 @@ const AIChatPage: React.FC = () => {
                         </div>
                     </TabsContent>
 
-                    {/* TAB 2: Webhook Status */}
+                    {/* TAB 2: Knowledge Base (RAG) */}
+                     <TabsContent value="knowledge" className="flex-1 overflow-y-auto p-6 m-0">
+                        <div className="max-w-4xl mx-auto space-y-6">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h2 className="text-xl font-bold text-white">Knowledge Base</h2>
+                                    <p className="text-sm text-slate-400">Upload documents to train your AI agent.</p>
+                                </div>
+                                <div className="flex gap-2">
+                                     <Input 
+                                        type="file" 
+                                        className="hidden" 
+                                        ref={fileInputRef} 
+                                        onChange={handleFileUpload} 
+                                        accept=".txt,.md,.csv,.json" 
+                                    />
+                                    <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+                                        Upload File
+                                    </Button>
+                                </div>
+                            </div>
+
+                            <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
+                                <CardHeader>
+                                    <CardTitle className="text-sm">Add New Knowledge</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <textarea 
+                                        value={knowledgeInput}
+                                        onChange={(e) => setKnowledgeInput(e.target.value)}
+                                        className="w-full h-32 bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm focus:ring-1 focus:ring-blue-500"
+                                        placeholder="Paste text here or upload a file. E.g., Product prices, return policies, company info..."
+                                    />
+                                    <div className="flex justify-between items-center">
+                                        <p className="text-xs text-slate-500">
+                                            Note: Text is converted to vectors using Gemini Embeddings and stored in Supabase.
+                                        </p>
+                                        <Button onClick={addKnowledge} disabled={isEmbedding || !knowledgeInput.trim()} className="bg-blue-600 hover:bg-blue-500">
+                                            {isEmbedding ? 'Vectorizing...' : 'Add to Knowledge Base'}
+                                        </Button>
+                                    </div>
+                                </CardContent>
+                            </Card>
+
+                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                                {knowledgeItems.map((item) => (
+                                    <Card key={item.id} className="border border-slate-800 bg-slate-900/20">
+                                        <CardContent className="p-4">
+                                            <p className="text-xs text-slate-300 line-clamp-4 leading-relaxed">
+                                                {item.content}
+                                            </p>
+                                            <div className="mt-3 flex justify-between items-center text-[10px] text-slate-500">
+                                                <span>ID: {item.id}</span>
+                                                <Badge variant="outline" className="border-slate-800">Chunk</Badge>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                ))}
+                                {knowledgeItems.length === 0 && (
+                                    <div className="col-span-full p-8 text-center text-slate-500 border border-dashed border-slate-800 rounded-lg">
+                                        No knowledge added yet. Upload a file or paste text to get started.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                     </TabsContent>
+
+                    {/* TAB 3: Webhook Status */}
                     <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0">
                         <div className="max-w-2xl mx-auto space-y-6">
                             <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
@@ -515,49 +665,55 @@ const AIChatPage: React.FC = () => {
 
                             <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
                                 <CardHeader>
-                                    <CardTitle>Backend Deployment</CardTitle>
-                                    <CardDescription>Supabase Edge Function code required for this integration.</CardDescription>
+                                    <CardTitle>Supabase SQL Setup</CardTitle>
+                                    <CardDescription>Run this SQL in Supabase to enable Vector Search (RAG).</CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-400 font-mono border border-slate-800 max-h-[300px]">
-{`import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-blue-300 font-mono border border-slate-800 max-h-[300px]">
+{`-- 1. Enable Vector Extension
+create extension if not exists vector;
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+-- 2. Create Knowledge Table
+create table if not exists knowledge (
+  id bigint generated by default as identity primary key,
+  content text,
+  metadata jsonb,
+  embedding vector(768) -- Gemini Text Embedding 004 Dimension
+);
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
-
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-  )
-
-  try {
-      const formData = await req.formData();
-      const Body = formData.get('Body')?.toString() || '';
-      const From = formData.get('From')?.toString() || '';
-
-      if (!Body) return new Response('Ping', { headers: corsHeaders });
-
-      await supabase.from('messages').insert([{ text: Body, sender: 'user', phone: From }])
-
-      return new Response('<Response></Response>', { headers: { "Content-Type": "text/xml", ...corsHeaders } });
-  } catch (err) {
-      return new Response(String(err), { status: 500, headers: corsHeaders })
-  }
-})`}
+-- 3. Create Search Function
+create or replace function match_knowledge (
+  query_embedding vector(768),
+  match_threshold float,
+  match_count int
+)
+returns table (
+  id bigint,
+  content text,
+  similarity float
+)
+language plpgsql
+as $$
+begin
+  return query
+  select
+    knowledge.id,
+    knowledge.content,
+    1 - (knowledge.embedding <=> query_embedding) as similarity
+  from knowledge
+  where 1 - (knowledge.embedding <=> query_embedding) > match_threshold
+  order by knowledge.embedding <=> query_embedding
+  limit match_count;
+end;
+$$;`}
                                     </div>
-                                    <p className="text-xs text-slate-500 mt-2">Deploy command: <code>supabase functions deploy whatsapp --no-verify-jwt</code></p>
+                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(`create extension if not exists vector; create table if not exists knowledge ( id bigint generated by default as identity primary key, content text, metadata jsonb, embedding vector(768) ); create or replace function match_knowledge ( query_embedding vector(768), match_threshold float, match_count int ) returns table ( id bigint, content text, similarity float ) language plpgsql as $$ begin return query select knowledge.id, knowledge.content, 1 - (knowledge.embedding <=> query_embedding) as similarity from knowledge where 1 - (knowledge.embedding <=> query_embedding) > match_threshold order by knowledge.embedding <=> query_embedding limit match_count; end; $$;`)}>Copy SQL</Button>
                                 </CardContent>
                             </Card>
                         </div>
                     </TabsContent>
 
-                    {/* TAB 3: Logs */}
+                    {/* TAB 4: Logs */}
                     <TabsContent value="logs" className="flex-1 overflow-hidden m-0 bg-[#0c0c0c] text-white p-4 font-mono text-xs">
                          <div className="h-full overflow-y-auto space-y-1">
                             {logs.map((log, i) => (
