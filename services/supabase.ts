@@ -14,7 +14,6 @@ const getSupabaseConfig = () => {
     try {
         const env = (import.meta as any).env;
         return {
-            // Reverted to generic placeholders to ensure isSupabaseConfigured is false by default
             url: env?.VITE_SUPABASE_URL || "https://rwlecxyfukzberxcpqnr.supabase.co",
             key: env?.VITE_SUPABASE_ANON_KEY || "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
         };
@@ -31,10 +30,11 @@ const supabaseUrl = config.url;
 const supabaseAnonKey = config.key;
 
 // This check ensures we only try to connect if real credentials are provided
+// We compare against generic placeholders "YOUR_SUPABASE_URL" to allow your specific values to pass
 export const isSupabaseConfigured =
-  supabaseUrl !== "https://rwlecxyfukzberxcpqnr.supabase.co" && 
-  supabaseAnonKey !== "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6" &&
-  supabaseUrl.startsWith("http");
+  supabaseUrl !== "YOUR_SUPABASE_URL" && 
+  supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY" &&
+  supabaseUrl.startsWith("https");
 
 if (!isSupabaseConfigured) {
     console.warn("Supabase credentials are not set. The app will run in Demo/Offline mode.");
