@@ -132,11 +132,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       // 1. Fetch Profile
-      const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
+      // We retry a few times because the Trigger might take a split second to create the profile after signup
+      let profileData = null;
+      let retries = 0;
+      
+      while (!profileData && retries < 3) {
+          const { data, error } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single();
+          
+          if (data) {
+              profileData = data;
+          } else {
+              retries++;
+              await new Promise(r => setTimeout(r, 500)); // Wait 500ms before retry
+          }
+      }
 
       if (profileData) {
           setProfile(profileData);
@@ -151,6 +164,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (orgData) {
               setOrganization(orgData);
           }
+      } else {
+          console.warn("Profile not found even after retries. The Trigger might have failed or RLS blocked it.");
       }
     } catch (e) {
       console.error("Error loading profile/org:", e);
@@ -232,9 +247,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // 2. Demo/Offline Mode Fallback
-    // If supabase is not configured OR the call failed but we want to allow demo access:
-    
-    // Create Mock Session
     const mockUser = { id: 'user_demo_123', email: email } as User;
     const mockProfile: UserProfile = {
         id: 'user_demo_123',
@@ -261,45 +273,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { data: { user: mockUser, session: { user: mockUser } }, error: null };
   };
 
-  // Updated to include companyName
   const signUp = async (email: string, pass: string, companyName: string) => {
     const finalCompanyName = companyName || "My Workspace";
 
     if (supabase) {
-        // 1. Create Auth User
-        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password: pass });
+        // We now rely on a POSTGRES TRIGGER to create the profile and organization.
+        // We pass the company_name in the user_metadata so the trigger can access it.
+        const { data: authData, error: authError } = await supabase.auth.signUp({ 
+            email, 
+            password: pass,
+            options: {
+                data: {
+                    company_name: finalCompanyName,
+                    full_name: email.split('@')[0]
+                }
+            }
+        });
         
-        if (authError || !authData.user) return { data: authData, error: authError };
-
-        // 2. Create Organization with provided name
-        const { data: orgData, error: orgError } = await supabase
-            .from('organizations')
-            .insert({
-                name: finalCompanyName,
-                plan: 'Free',
-                credits: 30, // Default Free Credits
-                subscription_status: 'active'
-            })
-            .select()
-            .single();
-        
-        if (orgError || !orgData) {
-            console.error("Org creation failed", orgError);
-            return { data: authData, error: orgError };
-        }
-
-        // 3. Create Profile linked to Org
-        const { error: profileError } = await supabase
-            .from('profiles')
-            .insert({
-                id: authData.user.id,
-                email: email,
-                organization_id: orgData.id,
-                role: 'owner',
-                full_name: email.split('@')[0]
-            });
-        
-        return { data: authData, error: profileError };
+        return { data: authData, error: authError };
     }
 
     // Demo Mode Sign Up (Mock)
@@ -338,7 +329,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
         console.error("Error signing out from Supabase:", error);
     } finally {
-        // ALWAYS clear local state, regardless of Supabase errors
         setSession(null);
         setUser(null);
         setOrganization(null);
@@ -378,4 +368,3 @@ export const useAuth = () => {
   }
   return context;
 };
-      
