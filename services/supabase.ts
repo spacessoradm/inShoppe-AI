@@ -15,13 +15,13 @@ const getSupabaseConfig = () => {
         const env = (import.meta as any).env;
         return {
             // Reverted to generic placeholders to ensure isSupabaseConfigured is false by default
-            url: env?.VITE_SUPABASE_URL || "YOUR_SUPABASE_URL",
-            key: env?.VITE_SUPABASE_ANON_KEY || "YOUR_SUPABASE_ANON_KEY"
+            url: env?.VITE_SUPABASE_URL || "https://rwlecxyfukzberxcpqnr.supabase.co",
+            key: env?.VITE_SUPABASE_ANON_KEY || "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
         };
     } catch (e) {
         return {
-            url: "YOUR_SUPABASE_URL",
-            key: "YOUR_SUPABASE_ANON_KEY"
+            url: "https://rwlecxyfukzberxcpqnr.supabase.co",
+            key: "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
         };
     }
 };
@@ -32,8 +32,8 @@ const supabaseAnonKey = config.key;
 
 // This check ensures we only try to connect if real credentials are provided
 export const isSupabaseConfigured =
-  supabaseUrl !== "YOUR_SUPABASE_URL" && 
-  supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY" &&
+  supabaseUrl !== "https://rwlecxyfukzberxcpqnr.supabase.co" && 
+  supabaseAnonKey !== "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6" &&
   supabaseUrl.startsWith("http");
 
 if (!isSupabaseConfigured) {
