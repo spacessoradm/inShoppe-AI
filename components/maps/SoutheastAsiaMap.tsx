@@ -1,3 +1,6 @@
+
+import React from 'react';
+
 export default function SoutheastAsiaMap() {
   return (
     <div className="relative w-full h-[460px] bg-black">

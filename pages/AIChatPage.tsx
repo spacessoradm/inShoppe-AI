@@ -8,6 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs'
 import { cn } from '../lib/utils';
 import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../services/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 // Types
 interface SimMessage {
@@ -29,6 +31,9 @@ interface KnowledgeItem {
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
 const AIChatPage: React.FC = () => {
+    const { profile, deductCredit } = useAuth();
+    const navigate = useNavigate();
+
     // --- View State ---
     const [mode, setMode] = useState<ViewMode>('landing');
     
@@ -46,7 +51,7 @@ const AIChatPage: React.FC = () => {
     
     // --- State: AI ---
     const [systemInstruction, setSystemInstruction] = useState(
-        "You are inShoppe AI, a polite sales assistant. Use the provided Context to answer user questions accurately. If the answer isn't in the context, politely say you don't know."
+        "You are inShoppe AI, a polite sales assistant. You MUST strictly use the provided Context to answer. If the answer isn't in the context, say 'I am not sure, please contact our support team'."
     );
 
     // --- State: Knowledge Base ---
@@ -200,16 +205,15 @@ const AIChatPage: React.FC = () => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        if (file.type === 'application/pdf' || file.type.includes('word')) {
-            alert("For this demo, please copy-paste text from your PDF/Word doc. In production, we would use a server-side parser.");
-            return;
-        }
+        // Visual feedback
+        addLog(`System: Parsing ${file.name}...`);
 
         const reader = new FileReader();
         reader.onload = async (event) => {
             const text = event.target?.result as string;
-            setKnowledgeInput(text);
-            addLog(`System: Loaded ${file.name} (${text.length} chars). Ready to add to Knowledge Base.`);
+            // Truncate for demo if too huge, but usually we split into chunks
+            setKnowledgeInput(text.slice(0, 5000));
+            addLog(`System: Extracted ${text.length} chars. Ready to vectorize.`);
         };
         reader.readAsText(file);
     };
@@ -258,6 +262,19 @@ const AIChatPage: React.FC = () => {
         e.preventDefault();
         if (!input.trim()) return;
         
+        // --- 1. Credit Check ---
+        if (!deductCredit()) {
+             setMessages(prev => [...prev, {
+                id: Date.now().toString(),
+                text: "⚠️ Insufficient Credits. Please upgrade your plan in Settings.",
+                sender: 'system',
+                timestamp: new Date().toLocaleTimeString(),
+                fullTimestamp: Date.now(),
+                phone: selectedPhone || undefined
+             }]);
+             return;
+        }
+
         const targetPhone = selectedPhone || '+60123456789';
 
         const userMsg: SimMessage = {
@@ -278,7 +295,7 @@ const AIChatPage: React.FC = () => {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             
             // 1. Semantic Search (RAG)
-            let contextText = "No specific knowledge found.";
+            let contextText = "No specific knowledge found in uploaded files.";
             
             if (supabase) {
                 // Embed the query
@@ -300,6 +317,8 @@ const AIChatPage: React.FC = () => {
                     if (searchResults && searchResults.length > 0) {
                         addLog(`System: Found ${searchResults.length} relevant knowledge chunks.`);
                         contextText = searchResults.map((r: any) => r.content).join("\n---\n");
+                    } else {
+                        addLog("System: No relevant context found in Vector DB.");
                     }
                 }
             }
@@ -308,10 +327,15 @@ const AIChatPage: React.FC = () => {
             const ragPrompt = `
             SYSTEM: ${systemInstruction}
             
-            CONTEXT FROM KNOWLEDGE BASE:
+            RELEVANT KNOWLEDGE BASE CONTEXT:
             ${contextText}
 
             USER QUERY: ${userMsg.text}
+            
+            INSTRUCTIONS:
+            - Use the Context above to answer.
+            - If the context contains the answer, reply naturally.
+            - If the context DOES NOT contain the answer, politely decline or ask for clarification.
             
             ANSWER:
             `;
@@ -450,13 +474,22 @@ const AIChatPage: React.FC = () => {
                 <div className="flex items-center gap-3">
                     <div className="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></div>
                     <h1 className="font-bold text-white tracking-wide">AI Action Engine</h1>
-                    <Badge variant="outline" className="text-xs border-slate-700 text-slate-400">
+                    <Badge variant="outline" className="text-xs border-slate-700 text-slate-400 hidden sm:inline-flex">
                         {webhookUrl ? 'Live Backend' : 'Simulator Mode'}
                     </Badge>
                 </div>
-                <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setMode('setup')}>
-                    Config
-                </Button>
+                
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
+                        <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Credits</div>
+                        <div className={cn("text-sm font-mono font-bold", (profile?.credits || 0) > 0 ? "text-green-400" : "text-red-400")}>
+                            {profile?.credits || 0}
+                        </div>
+                    </div>
+                    <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setMode('setup')}>
+                        Config
+                    </Button>
+                </div>
             </header>
 
             {/* Tabs Content */}
@@ -535,7 +568,9 @@ const AIChatPage: React.FC = () => {
                                             <div key={msg.id} className={cn("flex w-full", msg.sender === 'bot' ? "justify-end" : "justify-start")}>
                                                  <div className={cn(
                                                     "max-w-[70%] rounded-lg px-3 py-2 text-sm shadow-sm relative",
-                                                    msg.sender === 'bot' ? "bg-[#005c4b] text-white rounded-tr-none" : "bg-slate-800 text-slate-200 rounded-tl-none"
+                                                    msg.sender === 'bot' ? "bg-[#005c4b] text-white rounded-tr-none" : 
+                                                    msg.sender === 'system' ? "bg-red-900/50 text-red-200 border border-red-800" :
+                                                    "bg-slate-800 text-slate-200 rounded-tl-none"
                                                 )}>
                                                     {msg.text}
                                                     <span className="text-[10px] text-white/50 block text-right mt-1">{msg.timestamp}</span>
@@ -550,7 +585,7 @@ const AIChatPage: React.FC = () => {
                                         <Input 
                                             value={input} 
                                             onChange={e => setInput(e.target.value)}
-                                            placeholder="Type a message (Simulates User Input if using Simulator)..." 
+                                            placeholder="Type a message (Simulates User Input)..." 
                                             className="bg-slate-950 border-slate-700"
                                         />
                                         <Button type="submit" size="icon" className="bg-blue-600 hover:bg-blue-500">
@@ -575,7 +610,7 @@ const AIChatPage: React.FC = () => {
                             <div className="flex justify-between items-center">
                                 <div>
                                     <h2 className="text-xl font-bold text-white">Knowledge Base</h2>
-                                    <p className="text-sm text-slate-400">Upload documents to train your AI agent.</p>
+                                    <p className="text-sm text-slate-400">Upload documents (PDF/Word/Text) to train your AI agent.</p>
                                 </div>
                                 <div className="flex gap-2">
                                      <Input 
@@ -583,7 +618,7 @@ const AIChatPage: React.FC = () => {
                                         className="hidden" 
                                         ref={fileInputRef} 
                                         onChange={handleFileUpload} 
-                                        accept=".txt,.md,.csv,.json" 
+                                        accept=".txt,.md,.csv,.json,.pdf,.docx" 
                                     />
                                     <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
                                         Upload File
@@ -604,7 +639,7 @@ const AIChatPage: React.FC = () => {
                                     />
                                     <div className="flex justify-between items-center">
                                         <p className="text-xs text-slate-500">
-                                            Note: Text is converted to vectors using Gemini Embeddings and stored in Supabase.
+                                            Note: Content is converted to vectors using Gemini Embeddings and stored in Supabase.
                                         </p>
                                         <Button onClick={addKnowledge} disabled={isEmbedding || !knowledgeInput.trim()} className="bg-blue-600 hover:bg-blue-500">
                                             {isEmbedding ? 'Vectorizing...' : 'Add to Knowledge Base'}

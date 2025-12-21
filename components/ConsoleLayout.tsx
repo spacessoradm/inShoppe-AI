@@ -13,7 +13,8 @@ const mockChatSessions: ChatSession[] = [
 ];
 
 const ConsoleLayout: React.FC = () => {
-  const { user, signOut, plan, isWhatsAppConnected } = useAuth();
+  const { user, signOut, profile, isWhatsAppConnected } = useAuth();
+  const plan = profile?.plan;
   const navigate = useNavigate();
 
   const handleSignOut = () => {

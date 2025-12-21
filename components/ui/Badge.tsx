@@ -2,9 +2,7 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
 
-// FIX: Changed from React.HTMLAttributes<HTMLDivElement> to React.ComponentPropsWithoutRef<'div'>.
-// This correctly infers all standard div attributes, including `className`, resolving the type errors.
-interface BadgeProps extends React.ComponentPropsWithoutRef<'div'> {
+export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
   variant?: 'default' | 'secondary' | 'destructive' | 'outline';
 }
 
