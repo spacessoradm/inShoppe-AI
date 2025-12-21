@@ -18,8 +18,8 @@ const ConsoleLayout: React.FC = () => {
   const plan = organization?.plan;
   const navigate = useNavigate();
 
-  const handleSignOut = () => {
-    signOut();
+  const handleSignOut = async () => {
+    await signOut();
     navigate('/');
   };
 
