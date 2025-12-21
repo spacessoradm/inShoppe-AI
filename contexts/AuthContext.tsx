@@ -324,11 +324,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async () => {
     try {
         if (supabase) {
-            await supabase.auth.signOut();
+            // Race Supabase signOut against a 2-second timeout to prevent UI hanging
+            // if the server or network is unresponsive.
+            await Promise.race([
+                supabase.auth.signOut(),
+                new Promise(resolve => setTimeout(resolve, 2000))
+            ]);
         }
     } catch (error) {
         console.error("Error signing out from Supabase:", error);
     } finally {
+        // Always clean up local state
         setSession(null);
         setUser(null);
         setOrganization(null);

@@ -19,8 +19,13 @@ const ConsoleLayout: React.FC = () => {
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
-    await signOut();
-    navigate('/');
+    try {
+        await signOut();
+    } catch (e) {
+        console.error("Sign out error:", e);
+    } finally {
+        navigate('/');
+    }
   };
 
   return (
