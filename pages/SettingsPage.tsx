@@ -7,6 +7,7 @@ import { Input } from '../components/ui/Input';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '../components/ui/Badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
+import { PLAN_LIMITS } from '../types';
 
 // --- CONFIGURATION START ---
 // DEMO: Paste your Stripe Publishable Key here to show "Connected" status.
@@ -17,6 +18,7 @@ const SettingsPage: React.FC = () => {
     const { user, profile, organization } = useAuth();
     const navigate = useNavigate();
     const [name, setName] = useState(profile?.full_name || 'Merchant Name');
+    const [inviteEmail, setInviteEmail] = useState('');
     
     // Check key safely
     const getStripeKey = () => {
@@ -29,6 +31,10 @@ const SettingsPage: React.FC = () => {
     }
     const stripeKey = getStripeKey();
 
+    const currentPlanLimit = organization ? PLAN_LIMITS[organization.plan] : 1;
+    // Mock current users count (In a real app, query 'profiles' where organization_id matches)
+    const currentUsers = 1; 
+
     return (
         <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
             <div className="max-w-4xl mx-auto space-y-6">
@@ -38,11 +44,12 @@ const SettingsPage: React.FC = () => {
                 </div>
 
                 <Tabs defaultValue="profile" className="w-full">
-                    <TabsList className="grid w-full grid-cols-4 bg-slate-900/50 border border-slate-700 mb-6">
+                    <TabsList className="grid w-full grid-cols-5 bg-slate-900/50 border border-slate-700 mb-6">
                         <TabsTrigger value="profile">Profile</TabsTrigger>
-                        <TabsTrigger value="billing">Plan & Billing</TabsTrigger>
+                        <TabsTrigger value="billing">Billing</TabsTrigger>
+                        <TabsTrigger value="team">Team</TabsTrigger>
                         <TabsTrigger value="integrations">Integrations</TabsTrigger>
-                        <TabsTrigger value="danger">Danger Zone</TabsTrigger>
+                        <TabsTrigger value="danger">Danger</TabsTrigger>
                     </TabsList>
                     
                     <TabsContent value="profile" className="space-y-4">
@@ -114,6 +121,70 @@ const SettingsPage: React.FC = () => {
                                     <Button variant="outline" onClick={() => navigate('/pricing')} className="border-slate-600 hover:bg-slate-800 hover:text-white w-full sm:w-auto">
                                         Upgrade / Change Plan
                                     </Button>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </TabsContent>
+
+                    <TabsContent value="team" className="space-y-4">
+                        <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
+                            <CardHeader className="flex flex-row items-center justify-between">
+                                <div>
+                                    <CardTitle>Team Members</CardTitle>
+                                    <CardDescription className="text-slate-400">
+                                        Manage who has access to your organization.
+                                    </CardDescription>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-2xl font-bold">{currentUsers}</span>
+                                    <span className="text-slate-500"> / {currentPlanLimit}</span>
+                                    <p className="text-xs text-slate-400">Seats Used</p>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-6">
+                                {/* Invite Section */}
+                                <div className="flex gap-2">
+                                    <Input 
+                                        placeholder="colleague@company.com" 
+                                        className="bg-slate-950/50 border-slate-700 flex-1"
+                                        value={inviteEmail}
+                                        onChange={(e) => setInviteEmail(e.target.value)}
+                                        disabled={currentUsers >= currentPlanLimit}
+                                    />
+                                    <Button 
+                                        disabled={currentUsers >= currentPlanLimit}
+                                        className="bg-blue-600 hover:bg-blue-500"
+                                    >
+                                        Invite
+                                    </Button>
+                                </div>
+                                
+                                {currentUsers >= currentPlanLimit && (
+                                    <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-md text-amber-200 text-sm">
+                                        You have reached the user limit for the <strong>{organization?.plan}</strong> plan. 
+                                        <span className="underline cursor-pointer ml-1 text-amber-400" onClick={() => navigate('/pricing')}>Upgrade to add more members.</span>
+                                    </div>
+                                )}
+
+                                {/* Member List */}
+                                <div className="space-y-4">
+                                    <h4 className="text-sm font-medium text-slate-400 uppercase tracking-wider">Active Members</h4>
+                                    
+                                    {/* Mock Current User */}
+                                    <div className="flex items-center justify-between p-3 rounded-lg bg-slate-800/30 border border-slate-700/50">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white">
+                                                {profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'U'}
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-medium text-white">{profile?.full_name || 'You'}</p>
+                                                <p className="text-xs text-slate-400">{user?.email}</p>
+                                            </div>
+                                        </div>
+                                        <Badge variant="outline" className="border-slate-600 text-slate-300 capitalize">
+                                            {profile?.role}
+                                        </Badge>
+                                    </div>
                                 </div>
                             </CardContent>
                         </Card>

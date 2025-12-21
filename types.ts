@@ -19,6 +19,13 @@ export interface ChatSession {
 
 export type Plan = 'Free' | 'Starter' | 'Growth' | 'Pro';
 
+export const PLAN_LIMITS: Record<Plan, number> = {
+  'Free': 1,
+  'Starter': 5,
+  'Growth': 20, // Legacy/Intermediate
+  'Pro': 50
+};
+
 export interface Organization {
   id: string;
   name: string;

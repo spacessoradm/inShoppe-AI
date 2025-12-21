@@ -8,6 +8,7 @@ import SoutheastAsiaMap from '../components/maps/SoutheastAsiaMap';
 const AuthPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -24,7 +25,7 @@ const AuthPage: React.FC = () => {
     try {
       if (isSignUp) {
         // Sign Up Logic
-        const { error, data } = await signUp(email, password);
+        const { error, data } = await signUp(email, password, companyName);
         if (error) {
           setError(error.message);
         } else if (data.user && !data.session) {
@@ -53,6 +54,7 @@ const AuthPage: React.FC = () => {
       setMessage(null);
       setEmail('');
       setPassword('');
+      setCompanyName('');
   };
 
   return (
@@ -99,6 +101,21 @@ const AuthPage: React.FC = () => {
                <div className="p-3 rounded-md bg-green-50 text-green-600 text-sm border border-green-100 animate-fadeInUp">
                  {message}
                </div>
+            )}
+
+            {isSignUp && (
+              <div className="space-y-1.5 animate-fadeInUp">
+                <label htmlFor="companyName" className="text-sm font-bold text-slate-800">Organization Name <span className="text-red-500">*</span></label>
+                <Input
+                  id="companyName"
+                  type="text"
+                  placeholder="e.g. Acme Corp"
+                  required
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="h-11 border-slate-200 bg-white text-slate-900 focus-visible:ring-indigo-600 focus-visible:border-indigo-600 rounded-lg placeholder:text-slate-400 shadow-sm"
+                />
+              </div>
             )}
             
             <div className="space-y-1.5">
@@ -155,8 +172,6 @@ const AuthPage: React.FC = () => {
         <div className="relative w-full max-w-[650px] aspect-[1.4]">
           <SoutheastAsiaMap />
         </div>
-
-
 
         <div className="absolute bottom-16 text-center w-full px-12">
             <p className="text-slate-500 text-sm font-medium mb-8">Trusted by teams across Southeast Asia</p>

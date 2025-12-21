@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../services/supabase';
-import { Plan, UserProfile, Organization } from '../types';
+import { Plan, UserProfile, Organization, PLAN_LIMITS } from '../types';
 
 // Storage keys
 const PROFILE_KEY = 'inshoppe-profile';
@@ -15,7 +15,7 @@ interface AuthContextType {
   organization: Organization | null;
   loading: boolean;
   signIn: (email: string, pass: string) => Promise<{ error: any; data: any }>;
-  signUp: (email: string, pass: string) => Promise<{ error: any; data: any }>;
+  signUp: (email: string, pass: string, companyName: string) => Promise<{ error: any; data: any }>;
   signOut: () => Promise<void>;
   upgradePlan: (plan: Plan, creditsToAdd: number) => Promise<void>;
   deductCredit: () => Promise<boolean>; 
@@ -259,18 +259,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { data: { user: mockUser, session: { user: mockUser } }, error: null };
   };
 
-  const signUp = async (email: string, pass: string) => {
+  // Updated to include companyName
+  const signUp = async (email: string, pass: string, companyName: string) => {
+    const finalCompanyName = companyName || "My Workspace";
+
     if (supabase) {
         // 1. Create Auth User
         const { data: authData, error: authError } = await supabase.auth.signUp({ email, password: pass });
         
         if (authError || !authData.user) return { data: authData, error: authError };
 
-        // 2. Create "Freelancer" Organization
+        // 2. Create Organization with provided name
         const { data: orgData, error: orgError } = await supabase
             .from('organizations')
             .insert({
-                name: "Freelancer Workspace",
+                name: finalCompanyName,
                 plan: 'Free',
                 credits: 30, // Default Free Credits
                 subscription_status: 'active'
@@ -298,7 +301,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Demo Mode Sign Up (Mock)
-    return signIn(email, pass);
+    // Update the mock logic to use the companyName
+    const mockUser = { id: 'user_demo_123', email: email } as User;
+    const mockProfile: UserProfile = {
+        id: 'user_demo_123',
+        email: email,
+        organization_id: 'org_demo_123',
+        role: 'owner',
+        full_name: email.split('@')[0]
+    };
+    const mockOrg: Organization = {
+        id: 'org_demo_123',
+        name: finalCompanyName,
+        plan: 'Free',
+        credits: 30,
+        subscription_status: 'active'
+    };
+
+    setUser(mockUser);
+    setProfile(mockProfile);
+    setOrganization(mockOrg);
+    
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(mockProfile));
+    localStorage.setItem(ORG_KEY, JSON.stringify(mockOrg));
+    
+    return { data: { user: mockUser, session: { user: mockUser } }, error: null };
   };
 
   const signOut = async () => {
