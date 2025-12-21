@@ -34,50 +34,86 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isWhatsAppConnected, setIsWhatsAppConnected] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+
     const initAuth = async () => {
       try {
         if (supabase) {
-          const { data: { session }, error } = await supabase.auth.getSession();
-          if (error) throw error;
+          // Attempt to get session from Supabase
+          const { data, error } = await supabase.auth.getSession();
           
-          setSession(session);
-          setUser(session?.user ?? null);
-          if (session?.user) {
-              await loadProfileAndOrg(session.user.id);
+          if (mounted) {
+              if (error) {
+                  console.warn("Supabase session error:", error.message);
+                  setSession(null);
+                  setUser(null);
+              } else {
+                  setSession(data.session);
+                  setUser(data.session?.user ?? null);
+                  if (data.session?.user) {
+                      await loadProfileAndOrg(data.session.user.id);
+                  }
+              }
           }
         } else {
           // Fallback for demo without Supabase auth flow
           const savedProfile = localStorage.getItem(PROFILE_KEY);
           const savedOrg = localStorage.getItem(ORG_KEY);
-          if (savedProfile) setProfile(JSON.parse(savedProfile));
-          if (savedOrg) setOrganization(JSON.parse(savedOrg));
+          if (mounted) {
+              if (savedProfile) setProfile(JSON.parse(savedProfile));
+              if (savedOrg) setOrganization(JSON.parse(savedOrg));
+          }
         }
       } catch (error) {
         console.warn("Auth initialization failed (using fallback/guest mode):", error);
-        // Ensure we don't leave the app in a broken state
-        setSession(null);
-        setUser(null);
+        if (mounted) {
+            setSession(null);
+            setUser(null);
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+            setLoading(false);
+        }
       }
     };
 
     initAuth();
 
-    const { data: authListener } = supabase?.auth.onAuthStateChange(async (_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-          await loadProfileAndOrg(session.user.id);
-      } else {
-          setProfile(null);
-          setOrganization(null);
-      }
-      setLoading(false);
-    }) || { data: { subscription: { unsubscribe: () => {} } } };
+    // Safety timeout: If auth takes longer than 3 seconds, force loading to false
+    const safetyTimeout = setTimeout(() => {
+        if (mounted && loading) {
+            console.warn("Auth timed out, forcing app load");
+            setLoading(false);
+        }
+    }, 3000);
+
+    // Setup listener only if supabase exists
+    let authListener: { subscription: { unsubscribe: () => void } } | null = null;
+    
+    if (supabase) {
+        const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            if (!mounted) return;
+            
+            setSession(session);
+            setUser(session?.user ?? null);
+            
+            if (session?.user) {
+                await loadProfileAndOrg(session.user.id);
+            } else {
+                setProfile(null);
+                setOrganization(null);
+            }
+            setLoading(false);
+        });
+        authListener = data;
+    }
 
     return () => {
-      authListener.subscription.unsubscribe();
+      mounted = false;
+      clearTimeout(safetyTimeout);
+      if (authListener) {
+        authListener.subscription.unsubscribe();
+      }
     };
   }, []);
 

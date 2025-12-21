@@ -9,18 +9,19 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// FIX: Use safe access for import.meta.env to prevent crashes in environments where env is undefined
+// FIX: Use safe access for import.meta.env
 const getSupabaseConfig = () => {
     try {
         const env = (import.meta as any).env;
         return {
-            url: env?.VITE_SUPABASE_URL || "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: env?.VITE_SUPABASE_ANON_KEY || "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
+            // Reverted to generic placeholders to ensure isSupabaseConfigured is false by default
+            url: env?.VITE_SUPABASE_URL || "YOUR_SUPABASE_URL",
+            key: env?.VITE_SUPABASE_ANON_KEY || "YOUR_SUPABASE_ANON_KEY"
         };
     } catch (e) {
         return {
-            url: "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
+            url: "YOUR_SUPABASE_URL",
+            key: "YOUR_SUPABASE_ANON_KEY"
         };
     }
 };
@@ -29,11 +30,14 @@ const config = getSupabaseConfig();
 const supabaseUrl = config.url;
 const supabaseAnonKey = config.key;
 
+// This check ensures we only try to connect if real credentials are provided
 export const isSupabaseConfigured =
-  supabaseUrl !== "YOUR_SUPABASE_URL" && supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY";
+  supabaseUrl !== "YOUR_SUPABASE_URL" && 
+  supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY" &&
+  supabaseUrl.startsWith("http");
 
 if (!isSupabaseConfigured) {
-    console.warn("Supabase credentials are not set. The app will show a setup page. Please update services/supabase.ts with your project URL and anon key.");
+    console.warn("Supabase credentials are not set. The app will run in Demo/Offline mode.");
 }
 
 export const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
