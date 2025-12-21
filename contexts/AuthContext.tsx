@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
-import { supabase } from '../services/supabase';
+import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { Plan, UserProfile, Organization, PLAN_LIMITS } from '../types';
 
 // Storage keys
@@ -21,6 +21,7 @@ interface AuthContextType {
   deductCredit: () => Promise<boolean>; 
   isWhatsAppConnected: boolean;
   connectWhatsApp: () => void;
+  isDemoMode: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -39,6 +40,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const initAuth = async () => {
       try {
         if (supabase) {
+          console.log("AuthContext: Initializing with Supabase...");
           // Attempt to get session from Supabase
           const { data, error } = await supabase.auth.getSession();
           
@@ -56,6 +58,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }
           }
         } else {
+          console.log("AuthContext: Initializing in DEMO MODE (Local Storage)...");
           // Fallback for demo without Supabase auth flow
           const savedProfile = localStorage.getItem(PROFILE_KEY);
           const savedOrg = localStorage.getItem(ORG_KEY);
@@ -230,7 +233,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // 2. Demo/Offline Mode Fallback
     // If supabase is not configured OR the call failed but we want to allow demo access:
-    // (Note: In a real app, you might strict check isSupabaseConfigured. Here we are lenient for the demo.)
     
     // Create Mock Session
     const mockUser = { id: 'user_demo_123', email: email } as User;
@@ -301,7 +303,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Demo Mode Sign Up (Mock)
-    // Update the mock logic to use the companyName
+    console.log("Supabase not available, using Demo Sign Up");
     const mockUser = { id: 'user_demo_123', email: email } as User;
     const mockProfile: UserProfile = {
         id: 'user_demo_123',
@@ -363,6 +365,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     deductCredit,
     isWhatsAppConnected,
     connectWhatsApp,
+    isDemoMode: !isSupabaseConfigured
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -375,3 +378,4 @@ export const useAuth = () => {
   }
   return context;
 };
+      

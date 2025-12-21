@@ -11,12 +11,12 @@ const getSupabaseConfig = () => {
         const env = (import.meta as any).env;
         return {
             url: env?.VITE_SUPABASE_URL || "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: env?.VITE_SUPABASE_ANON_KEY || "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
+            key: env?.VITE_SUPABASE_ANON_KEY || ""
         };
     } catch (e) {
         return {
             url: "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
+            key: ""
         };
     }
 };
@@ -27,13 +27,18 @@ const supabaseAnonKey = config.key;
 
 // This check ensures we only try to connect if real credentials are provided
 export const isSupabaseConfigured =
-  supabaseUrl !== "https://rwlecxyfukzberxcpqnr.supabase.co" && 
-  supabaseAnonKey !== "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6" &&
+  supabaseUrl &&
   supabaseUrl.startsWith("https") &&
-  !supabaseAnonKey.includes("sb_publishable"); 
+  supabaseAnonKey &&
+  supabaseAnonKey.length > 20 &&
+  !supabaseAnonKey.includes("sb_publishable") &&
+  !supabaseAnonKey.includes("YOUR_SUPABASE");
 
 if (!isSupabaseConfigured) {
-    console.warn("Supabase credentials are not set in .env. The app will run in Demo/Offline mode.");
+    console.warn("Supabase credentials are not set or valid in .env. The app will run in Demo/Offline mode.");
+    console.log("Current Config State:", { supabaseUrl, keyLength: supabaseAnonKey?.length });
+} else {
+    console.log("Supabase configured. Connecting to:", supabaseUrl);
 }
 
 export const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
