@@ -35,21 +35,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const initAuth = async () => {
-      if (supabase) {
-        const { data: { session } } = await supabase.auth.getSession();
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (session?.user) {
-            await loadProfileAndOrg(session.user.id);
+      try {
+        if (supabase) {
+          const { data: { session }, error } = await supabase.auth.getSession();
+          if (error) throw error;
+          
+          setSession(session);
+          setUser(session?.user ?? null);
+          if (session?.user) {
+              await loadProfileAndOrg(session.user.id);
+          }
+        } else {
+          // Fallback for demo without Supabase auth flow
+          const savedProfile = localStorage.getItem(PROFILE_KEY);
+          const savedOrg = localStorage.getItem(ORG_KEY);
+          if (savedProfile) setProfile(JSON.parse(savedProfile));
+          if (savedOrg) setOrganization(JSON.parse(savedOrg));
         }
-      } else {
-        // Fallback for demo without Supabase auth flow
-        const savedProfile = localStorage.getItem(PROFILE_KEY);
-        const savedOrg = localStorage.getItem(ORG_KEY);
-        if (savedProfile) setProfile(JSON.parse(savedProfile));
-        if (savedOrg) setOrganization(JSON.parse(savedOrg));
+      } catch (error) {
+        console.warn("Auth initialization failed (using fallback/guest mode):", error);
+        // Ensure we don't leave the app in a broken state
+        setSession(null);
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     initAuth();
@@ -76,29 +86,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loadProfileAndOrg = async (userId: string) => {
     if (!supabase) return;
 
-    // 1. Fetch Profile
-    const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+    try {
+      // 1. Fetch Profile
+      const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single();
 
-    if (profileData) {
-        setProfile(profileData);
-        
-        // 2. Fetch Organization
-        const { data: orgData } = await supabase
-            .from('organizations')
-            .select('*')
-            .eq('id', profileData.organization_id)
-            .single();
-        
-        if (orgData) {
-            setOrganization(orgData);
-        }
-    } else if (!profileData) {
-        // Handle case where auth user exists but profile db row doesn't (rare sync issue or first login before trigger)
-        // For this demo, we handle "first time" setup in SignUp, but this is a fallback
+      if (profileData) {
+          setProfile(profileData);
+          
+          // 2. Fetch Organization
+          const { data: orgData } = await supabase
+              .from('organizations')
+              .select('*')
+              .eq('id', profileData.organization_id)
+              .single();
+          
+          if (orgData) {
+              setOrganization(orgData);
+          }
+      }
+    } catch (e) {
+      console.error("Error loading profile/org:", e);
     }
   };
 
