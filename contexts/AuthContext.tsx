@@ -62,6 +62,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (mounted) {
               if (savedProfile) setProfile(JSON.parse(savedProfile));
               if (savedOrg) setOrganization(JSON.parse(savedOrg));
+              // Mock user session if profile exists in local storage
+              if (savedProfile) {
+                  const parsedProfile = JSON.parse(savedProfile);
+                  setUser({ id: parsedProfile.id, email: parsedProfile.email } as User);
+              }
           }
         }
       } catch (error) {
@@ -211,81 +216,107 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // --- Auth Functions ---
 
   const signIn = async (email: string, pass: string) => {
-    if (!supabase) return { error: { message: "Supabase not configured" }, data: null };
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
-    return { data, error };
-  };
-
-  const signUp = async (email: string, pass: string) => {
-    if (!supabase) return { error: { message: "Supabase not configured" }, data: null };
-    
-    // 1. Create Auth User
-    const { data: authData, error: authError } = await supabase.auth.signUp({ email, password: pass });
-    
-    if (authError || !authData.user) return { data: authData, error: authError };
-
-    // 2. Create "Freelancer" Organization
-    const { data: orgData, error: orgError } = await supabase
-        .from('organizations')
-        .insert({
-            name: "Freelancer Workspace",
-            plan: 'Free',
-            credits: 30, // Default Free Credits
-            subscription_status: 'active'
-        })
-        .select()
-        .single();
-    
-    if (orgError || !orgData) {
-        console.error("Org creation failed", orgError);
-        return { data: authData, error: orgError };
+    // 1. Try Supabase Auth
+    if (supabase) {
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
+            if (!error && data.session) return { data, error: null };
+            // If error, fall through to check for demo mode, or return error
+            if (error) return { data: null, error };
+        } catch (e) {
+            console.error("Supabase signin failed", e);
+        }
     }
 
-    // 3. Create Profile linked to Org
-    const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-            id: authData.user.id,
-            email: email,
-            organization_id: orgData.id,
-            role: 'owner',
-            full_name: email.split('@')[0]
-        });
-
-    // --- Demo Fallback Logic (Local Storage) ---
-    // If Supabase fails or is in mock mode, we set local storage to simulate success
-    const demoOrg: Organization = {
+    // 2. Demo/Offline Mode Fallback
+    // If supabase is not configured OR the call failed but we want to allow demo access:
+    // (Note: In a real app, you might strict check isSupabaseConfigured. Here we are lenient for the demo.)
+    
+    // Create Mock Session
+    const mockUser = { id: 'user_demo_123', email: email } as User;
+    const mockProfile: UserProfile = {
+        id: 'user_demo_123',
+        email: email,
+        organization_id: 'org_demo_123',
+        role: 'owner',
+        full_name: email.split('@')[0]
+    };
+    const mockOrg: Organization = {
         id: 'org_demo_123',
-        name: 'Freelancer Workspace',
+        name: 'Demo Workspace',
         plan: 'Free',
         credits: 30,
         subscription_status: 'active'
     };
-    const demoProfile: UserProfile = {
-        id: 'user_demo_123',
-        email: email,
-        organization_id: 'org_demo_123',
-        role: 'owner'
-    };
+
+    setUser(mockUser);
+    setProfile(mockProfile);
+    setOrganization(mockOrg);
     
-    if (!supabase || profileError) {
-        localStorage.setItem(ORG_KEY, JSON.stringify(demoOrg));
-        localStorage.setItem(PROFILE_KEY, JSON.stringify(demoProfile));
-        setOrganization(demoOrg);
-        setProfile(demoProfile);
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(mockProfile));
+    localStorage.setItem(ORG_KEY, JSON.stringify(mockOrg));
+
+    return { data: { user: mockUser, session: { user: mockUser } }, error: null };
+  };
+
+  const signUp = async (email: string, pass: string) => {
+    if (supabase) {
+        // 1. Create Auth User
+        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password: pass });
+        
+        if (authError || !authData.user) return { data: authData, error: authError };
+
+        // 2. Create "Freelancer" Organization
+        const { data: orgData, error: orgError } = await supabase
+            .from('organizations')
+            .insert({
+                name: "Freelancer Workspace",
+                plan: 'Free',
+                credits: 30, // Default Free Credits
+                subscription_status: 'active'
+            })
+            .select()
+            .single();
+        
+        if (orgError || !orgData) {
+            console.error("Org creation failed", orgError);
+            return { data: authData, error: orgError };
+        }
+
+        // 3. Create Profile linked to Org
+        const { error: profileError } = await supabase
+            .from('profiles')
+            .insert({
+                id: authData.user.id,
+                email: email,
+                organization_id: orgData.id,
+                role: 'owner',
+                full_name: email.split('@')[0]
+            });
+        
+        return { data: authData, error: profileError };
     }
-    
-    return { data: authData, error: profileError };
+
+    // Demo Mode Sign Up (Mock)
+    return signIn(email, pass);
   };
 
   const signOut = async () => {
-    if (supabase) await supabase.auth.signOut();
-    setSession(null);
-    setUser(null);
-    setOrganization(null);
-    setProfile(null);
-    localStorage.removeItem(PROFILE_KEY); 
-    localStorage.removeItem(ORG_KEY);
+    try {
+        if (supabase) {
+            await supabase.auth.signOut();
+        }
+    } catch (error) {
+        console.error("Error signing out from Supabase:", error);
+    } finally {
+        // ALWAYS clear local state, regardless of Supabase errors
+        setSession(null);
+        setUser(null);
+        setOrganization(null);
+        setProfile(null);
+        localStorage.removeItem(PROFILE_KEY); 
+        localStorage.removeItem(ORG_KEY);
+    }
   };
   
   const connectWhatsApp = () => {

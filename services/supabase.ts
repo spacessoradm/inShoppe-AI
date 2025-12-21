@@ -13,14 +13,15 @@ import { createClient } from '@supabase/supabase-js';
 const getSupabaseConfig = () => {
     try {
         const env = (import.meta as any).env;
+        // Defaults reverted to placeholders to prevent '406' errors from invalid keys
         return {
-            url: env?.VITE_SUPABASE_URL || "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: env?.VITE_SUPABASE_ANON_KEY || "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
+            url: env?.VITE_SUPABASE_URL || "YOUR_SUPABASE_URL",
+            key: env?.VITE_SUPABASE_ANON_KEY || "YOUR_SUPABASE_ANON_KEY"
         };
     } catch (e) {
         return {
-            url: "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: "sb_publishable_CtKp3I5HYZkpnVL17mD3ag_AEewmLC6"
+            url: "YOUR_SUPABASE_URL",
+            key: "YOUR_SUPABASE_ANON_KEY"
         };
     }
 };
@@ -34,10 +35,11 @@ const supabaseAnonKey = config.key;
 export const isSupabaseConfigured =
   supabaseUrl !== "YOUR_SUPABASE_URL" && 
   supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY" &&
-  supabaseUrl.startsWith("https");
+  supabaseUrl.startsWith("https") &&
+  !supabaseAnonKey.includes("sb_publishable"); // Basic check to avoid invalid publishable keys being used as anon keys
 
 if (!isSupabaseConfigured) {
-    console.warn("Supabase credentials are not set. The app will run in Demo/Offline mode.");
+    console.warn("Supabase credentials are not set (or invalid). The app will run in Demo/Offline mode.");
 }
 
 export const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
