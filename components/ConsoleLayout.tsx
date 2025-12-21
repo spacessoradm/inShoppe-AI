@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,8 +14,8 @@ const mockChatSessions: ChatSession[] = [
 ];
 
 const ConsoleLayout: React.FC = () => {
-  const { user, signOut, profile, isWhatsAppConnected } = useAuth();
-  const plan = profile?.plan;
+  const { user, signOut, organization, isWhatsAppConnected } = useAuth();
+  const plan = organization?.plan;
   const navigate = useNavigate();
 
   const handleSignOut = () => {

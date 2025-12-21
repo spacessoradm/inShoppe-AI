@@ -19,11 +19,20 @@ export interface ChatSession {
 
 export type Plan = 'Free' | 'Starter' | 'Growth' | 'Pro';
 
+export interface Organization {
+  id: string;
+  name: string;
+  plan: Plan;
+  credits: number;
+  subscription_status: 'active' | 'inactive' | 'past_due' | 'canceled';
+  current_period_end?: string; // ISO Date string for expiration
+  stripe_customer_id?: string;
+}
+
 export interface UserProfile {
   id: string;
   email: string;
-  plan: Plan;
-  credits: number; // For AI generation
-  subscription_status: 'active' | 'inactive' | 'past_due';
-  current_period_end?: string;
+  full_name?: string;
+  organization_id: string; // Link to the organization
+  role: 'owner' | 'member' | 'admin';
 }

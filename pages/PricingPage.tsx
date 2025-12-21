@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { cn } from '../lib/utils';
@@ -11,14 +11,10 @@ import { supabase } from '../services/supabase';
 import { loadStripe } from '@stripe/stripe-js';
 
 // --- CONFIGURATION START ---
-// DEMO: Paste your Stripe Publishable Key here (starts with pk_test_...)
-// If you leave this empty, the app will use Simulation Mode.
 const STRIPE_PUBLISHABLE_KEY = "pk_test_51SgbrxBKeQmYnrjTXQl56Q7mEq5cDZIK0SIxrAOaOMArfTpOgB03SOYOGrfl73iHD7hN0CWCVAcXrjUC7r4i9Qu6003ln3ypPc"; 
-
-// DEMO: Paste your Stripe Price IDs here (starts with price_...)
 const PRICE_IDS = {
     STARTER: 'price_1SgdQ6BKeQmYnrjTBmjI2z2N',
-    PRO: 'price_1SgdQdBKeQmYnrjTgfNNSUJo', // Placeholder for Pro
+    PRO: 'price_1SgdQdBKeQmYnrjTgfNNSUJo',
 };
 // --- CONFIGURATION END ---
 
@@ -39,7 +35,6 @@ const plans: PricingTier[] = [
         description: 'For individuals and early testing.',
         features: ['1 WhatsApp Number', 'Basic Chat', 'Community Support', '30 AI Credits'],
         credits: 30,
-        // No stripe ID for free plan
     },
     {
         name: 'Starter',
@@ -61,7 +56,7 @@ const plans: PricingTier[] = [
 ];
 
 const PricingPage: React.FC = () => {
-    const { user, upgradePlan, profile } = useAuth();
+    const { user, upgradePlan, organization } = useAuth();
     const navigate = useNavigate();
     const [processing, setProcessing] = useState<string | null>(null);
     const [successModal, setSuccessModal] = useState(false);
@@ -80,7 +75,7 @@ const PricingPage: React.FC = () => {
         // Special handling for Free plan (Downgrade/Switch)
         if (tier.name === 'Free') {
              await new Promise(resolve => setTimeout(resolve, 1000)); // Sim delay
-             upgradePlan(tier.name, tier.credits);
+             await upgradePlan(tier.name, tier.credits);
              setProcessing(null);
              setSuccessModal(true);
              return;
@@ -93,8 +88,6 @@ const PricingPage: React.FC = () => {
             if (isRealStripeReady) {
                 console.log("Attempting Real Stripe Checkout...");
                 
-                // 1. Call Supabase Edge Function to create Checkout Session
-                // Note: Your Edge Function must have the STRIPE_SECRET_KEY set in Supabase Secrets.
                 const { data, error } = await supabase!.functions.invoke('create-checkout-session', {
                     body: { 
                         price_id: tier.stripePriceId, 
@@ -111,10 +104,7 @@ const PricingPage: React.FC = () => {
                     return;
                 }
 
-                // 2. Redirect to Stripe
                 const stripe = await loadStripe(stripeKey);
-                // FIX: Casting stripe to any because redirectToCheckout might be missing from some type definitions
-                // but is required for client-side redirection with sessionId.
                 const { error: stripeError } = await (stripe as any).redirectToCheckout({ sessionId: data.sessionId });
                 
                 if (stripeError) {
@@ -128,24 +118,18 @@ const PricingPage: React.FC = () => {
         } catch (err) {
             console.error("Payment Error:", err);
             setProcessing(null);
-            // Optional: fallback to simulation on crash
-            // await simulateCheckout(tier);
         }
     };
 
     const simulateCheckout = async (tier: PricingTier) => {
-        // 1. Simulate Network Delay
         await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // 2. Instant Upgrade
-        upgradePlan(tier.name, tier.credits);
-        
+        await upgradePlan(tier.name, tier.credits);
         setProcessing(null);
         setSuccessModal(true);
     };
 
     const isCurrentPlan = (planName: string) => {
-        return profile?.plan === planName;
+        return organization?.plan === planName;
     };
     
     return (
@@ -259,7 +243,7 @@ const PricingPage: React.FC = () => {
                         </div>
                         <DialogTitle className="text-2xl">Plan Updated!</DialogTitle>
                         <DialogDescription className="text-slate-400 text-base">
-                            Your account has been updated successfully. Your credits have been adjusted.
+                            Your organization plan has been updated successfully.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="flex justify-center pt-4 pb-2">

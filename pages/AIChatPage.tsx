@@ -31,7 +31,7 @@ interface KnowledgeItem {
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
 const AIChatPage: React.FC = () => {
-    const { profile, deductCredit } = useAuth();
+    const { organization, deductCredit } = useAuth();
     const navigate = useNavigate();
 
     // --- View State ---
@@ -263,10 +263,11 @@ const AIChatPage: React.FC = () => {
         if (!input.trim()) return;
         
         // --- 1. Credit Check ---
-        if (!deductCredit()) {
+        const hasCredit = await deductCredit();
+        if (!hasCredit) {
              setMessages(prev => [...prev, {
                 id: Date.now().toString(),
-                text: "⚠️ Insufficient Credits. Please upgrade your plan in Settings.",
+                text: "⚠️ Insufficient Organization Credits. Please upgrade your plan in Settings.",
                 sender: 'system',
                 timestamp: new Date().toLocaleTimeString(),
                 fullTimestamp: Date.now(),
@@ -482,8 +483,8 @@ const AIChatPage: React.FC = () => {
                 <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
                         <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Credits</div>
-                        <div className={cn("text-sm font-mono font-bold", (profile?.credits || 0) > 0 ? "text-green-400" : "text-red-400")}>
-                            {profile?.credits || 0}
+                        <div className={cn("text-sm font-mono font-bold", (organization?.credits || 0) > 0 ? "text-green-400" : "text-red-400")}>
+                            {organization?.credits || 0}
                         </div>
                     </div>
                     <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setMode('setup')}>

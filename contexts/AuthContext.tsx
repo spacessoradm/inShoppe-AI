@@ -2,21 +2,23 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../services/supabase';
-import { Plan, UserProfile } from '../types';
+import { Plan, UserProfile, Organization } from '../types';
 
 // Storage keys
 const PROFILE_KEY = 'inshoppe-profile';
+const ORG_KEY = 'inshoppe-org';
 
 interface AuthContextType {
   session: Session | null;
   user: User | null;
   profile: UserProfile | null;
+  organization: Organization | null;
   loading: boolean;
   signIn: (email: string, pass: string) => Promise<{ error: any; data: any }>;
   signUp: (email: string, pass: string) => Promise<{ error: any; data: any }>;
   signOut: () => Promise<void>;
-  upgradePlan: (plan: Plan, creditsToAdd: number) => void;
-  deductCredit: () => boolean; // Returns true if successful
+  upgradePlan: (plan: Plan, creditsToAdd: number) => Promise<void>;
+  deductCredit: () => Promise<boolean>; 
   isWhatsAppConnected: boolean;
   connectWhatsApp: () => void;
 }
@@ -27,31 +29,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [organization, setOrganization] = useState<Organization | null>(null);
   const [loading, setLoading] = useState(true);
   const [isWhatsAppConnected, setIsWhatsAppConnected] = useState(false);
 
   useEffect(() => {
-    // 1. Initialize
     const initAuth = async () => {
       if (supabase) {
         const { data: { session } } = await supabase.auth.getSession();
         setSession(session);
         setUser(session?.user ?? null);
-        if (session?.user) loadProfile(session.user);
+        if (session?.user) {
+            await loadProfileAndOrg(session.user.id);
+        }
       } else {
         // Fallback for demo without Supabase auth flow
         const savedProfile = localStorage.getItem(PROFILE_KEY);
+        const savedOrg = localStorage.getItem(ORG_KEY);
         if (savedProfile) setProfile(JSON.parse(savedProfile));
+        if (savedOrg) setOrganization(JSON.parse(savedOrg));
       }
       setLoading(false);
     };
 
     initAuth();
 
-    const { data: authListener } = supabase?.auth.onAuthStateChange((_event, session) => {
+    const { data: authListener } = supabase?.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
-      if (session?.user) loadProfile(session.user);
+      if (session?.user) {
+          await loadProfileAndOrg(session.user.id);
+      } else {
+          setProfile(null);
+          setOrganization(null);
+      }
       setLoading(false);
     }) || { data: { subscription: { unsubscribe: () => {} } } };
 
@@ -60,47 +71,93 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // --- Profile Management ---
+  // --- Profile & Org Management ---
 
-  const loadProfile = async (user: User) => {
-    // In a real app, fetch from 'profiles' table in Supabase
-    // For this demo, we use localStorage to persist credit state across reloads
-    const saved = localStorage.getItem(PROFILE_KEY);
-    if (saved) {
-        setProfile(JSON.parse(saved));
-    } else {
-        // Initialize new profile
-        const newProfile: UserProfile = {
-            id: user.id,
-            email: user.email || '',
-            plan: 'Free',
-            credits: 30, // 30 Free credits on signup (matches Free plan)
-            subscription_status: 'active'
-        };
-        setProfile(newProfile);
-        localStorage.setItem(PROFILE_KEY, JSON.stringify(newProfile));
+  const loadProfileAndOrg = async (userId: string) => {
+    if (!supabase) return;
+
+    // 1. Fetch Profile
+    const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+    if (profileData) {
+        setProfile(profileData);
+        
+        // 2. Fetch Organization
+        const { data: orgData } = await supabase
+            .from('organizations')
+            .select('*')
+            .eq('id', profileData.organization_id)
+            .single();
+        
+        if (orgData) {
+            setOrganization(orgData);
+        }
+    } else if (!profileData) {
+        // Handle case where auth user exists but profile db row doesn't (rare sync issue or first login before trigger)
+        // For this demo, we handle "first time" setup in SignUp, but this is a fallback
     }
   };
 
-  const upgradePlan = (newPlan: Plan, creditsToAdd: number) => {
-    if (!profile) return;
-    const updated: UserProfile = {
-        ...profile,
-        plan: newPlan,
-        credits: profile.credits + creditsToAdd,
-        subscription_status: 'active'
-    };
-    setProfile(updated);
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(updated));
+  const upgradePlan = async (newPlan: Plan, creditsToAdd: number) => {
+    const now = new Date();
+    const nextMonth = new Date(now.setMonth(now.getMonth() + 1)).toISOString();
+
+    if (supabase && organization) {
+        // Update DB
+        const { error } = await supabase.from('organizations').update({
+            plan: newPlan,
+            credits: organization.credits + creditsToAdd,
+            subscription_status: 'active',
+            current_period_end: nextMonth
+        }).eq('id', organization.id);
+
+        if (!error) {
+             const updatedOrg = { 
+                 ...organization, 
+                 plan: newPlan, 
+                 credits: organization.credits + creditsToAdd,
+                 current_period_end: nextMonth,
+                 subscription_status: 'active' as const
+            };
+            setOrganization(updatedOrg);
+        }
+    } else {
+        // Local Demo Fallback
+        if (!organization) return;
+        const updatedOrg = { 
+            ...organization, 
+            plan: newPlan, 
+            credits: organization.credits + creditsToAdd,
+            current_period_end: nextMonth,
+            subscription_status: 'active' as const
+        };
+        setOrganization(updatedOrg);
+        localStorage.setItem(ORG_KEY, JSON.stringify(updatedOrg));
+    }
   };
 
-  const deductCredit = (): boolean => {
-      if (!profile) return false;
-      if (profile.credits <= 0) return false;
+  const deductCredit = async (): Promise<boolean> => {
+      if (!organization) return false;
+      if (organization.credits <= 0) return false;
 
-      const updated = { ...profile, credits: profile.credits - 1 };
-      setProfile(updated);
-      localStorage.setItem(PROFILE_KEY, JSON.stringify(updated));
+      const newCredits = organization.credits - 1;
+
+      if (supabase) {
+          const { error } = await supabase
+            .from('organizations')
+            .update({ credits: newCredits })
+            .eq('id', organization.id);
+          
+          if (error) return false;
+      }
+
+      const updated = { ...organization, credits: newCredits };
+      setOrganization(updated);
+      localStorage.setItem(ORG_KEY, JSON.stringify(updated)); // Sync local for consistency
       return true;
   };
 
@@ -114,18 +171,74 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signUp = async (email: string, pass: string) => {
     if (!supabase) return { error: { message: "Supabase not configured" }, data: null };
-    const { data, error } = await supabase.auth.signUp({ email, password: pass });
     
-    // In real app, triggering a SQL trigger to create profile row
-    return { data, error };
+    // 1. Create Auth User
+    const { data: authData, error: authError } = await supabase.auth.signUp({ email, password: pass });
+    
+    if (authError || !authData.user) return { data: authData, error: authError };
+
+    // 2. Create "Freelancer" Organization
+    const { data: orgData, error: orgError } = await supabase
+        .from('organizations')
+        .insert({
+            name: "Freelancer Workspace",
+            plan: 'Free',
+            credits: 30, // Default Free Credits
+            subscription_status: 'active'
+        })
+        .select()
+        .single();
+    
+    if (orgError || !orgData) {
+        console.error("Org creation failed", orgError);
+        return { data: authData, error: orgError };
+    }
+
+    // 3. Create Profile linked to Org
+    const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+            id: authData.user.id,
+            email: email,
+            organization_id: orgData.id,
+            role: 'owner',
+            full_name: email.split('@')[0]
+        });
+
+    // --- Demo Fallback Logic (Local Storage) ---
+    // If Supabase fails or is in mock mode, we set local storage to simulate success
+    const demoOrg: Organization = {
+        id: 'org_demo_123',
+        name: 'Freelancer Workspace',
+        plan: 'Free',
+        credits: 30,
+        subscription_status: 'active'
+    };
+    const demoProfile: UserProfile = {
+        id: 'user_demo_123',
+        email: email,
+        organization_id: 'org_demo_123',
+        role: 'owner'
+    };
+    
+    if (!supabase || profileError) {
+        localStorage.setItem(ORG_KEY, JSON.stringify(demoOrg));
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(demoProfile));
+        setOrganization(demoOrg);
+        setProfile(demoProfile);
+    }
+    
+    return { data: authData, error: profileError };
   };
 
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut();
     setSession(null);
     setUser(null);
-    // Optional: Keep profile in local storage for demo convenience, or clear it
-    // localStorage.removeItem(PROFILE_KEY); 
+    setOrganization(null);
+    setProfile(null);
+    localStorage.removeItem(PROFILE_KEY); 
+    localStorage.removeItem(ORG_KEY);
   };
   
   const connectWhatsApp = () => {
@@ -136,6 +249,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     session,
     user,
     profile,
+    organization,
     loading,
     signIn,
     signUp,
