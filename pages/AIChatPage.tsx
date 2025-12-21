@@ -33,7 +33,7 @@ interface KnowledgeItem {
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
 const AIChatPage: React.FC = () => {
-    const { user, organization, deductCredit } = useAuth();
+    const { user, profile, organization, deductCredit } = useAuth();
     const navigate = useNavigate();
 
     // --- View State ---
@@ -89,24 +89,38 @@ const AIChatPage: React.FC = () => {
         });
     }, [messages]);
 
-    // --- Effect: Load Config ---
+    // --- Effect: Load Config from LocalStorage ---
     useEffect(() => {
         const savedConfig = localStorage.getItem('twilio_user_config');
         if (savedConfig) {
             const parsed = JSON.parse(savedConfig);
             setAccountSid(parsed.accountSid || '');
             setAuthToken(parsed.authToken || '');
-            setMyPhoneNumber(parsed.phoneNumber || '');
+            // We set phone number here, but Profile DB takes precedence below
+            if (!myPhoneNumber) setMyPhoneNumber(parsed.phoneNumber || ''); 
             setWebhookUrl(parsed.webhookUrl || '');
             if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
             
+            // If we have credentials locally, go to dashboard
             if (parsed.accountSid && parsed.authToken) {
                 setMode('dashboard');
-            } else {
-                setMode('landing');
             }
         }
     }, []);
+
+    // --- Effect: Load Config from DB Profile (Persistence across devices) ---
+    useEffect(() => {
+        if (profile?.twilio_phone_number) {
+            console.log("Syncing Phone from Profile:", profile.twilio_phone_number);
+            setMyPhoneNumber(profile.twilio_phone_number);
+            
+            // If user has a linked number in DB, allow access to dashboard immediately (Simulator Mode)
+            // even if they haven't re-entered SID/Token on this specific device yet.
+            if (mode === 'landing') {
+                setMode('dashboard');
+            }
+        }
+    }, [profile, mode]);
 
     // --- Effect: Load Knowledge Base (Shared by Org) ---
     useEffect(() => {
@@ -201,12 +215,12 @@ const AIChatPage: React.FC = () => {
         e.preventDefault();
         setLoading(true);
 
-        // 1. Save to Local Storage
+        // 1. Save to Local Storage (Client preference)
         localStorage.setItem('twilio_user_config', JSON.stringify({
             accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
         }));
 
-        // 2. Save Phone Mapping to Supabase Profile (Important for Webhook Routing)
+        // 2. Save Phone Mapping to Supabase Profile (Server persistence)
         if (supabase && user && myPhoneNumber) {
              try {
                 const { error } = await supabase
@@ -341,9 +355,6 @@ const AIChatPage: React.FC = () => {
 
         // 2. Save User Message to DB (Simulation Mode)
         if (supabase && user && webhookUrl) {
-             // In simulation mode with a webhook URL, we might want to save to DB to trigger the Realtime subscription
-             // For purely client-side simulation, we skip this if not strictly needed, 
-             // but let's save it to test the user_id isolation.
              await supabase.from('messages').insert({
                 user_id: user.id,
                 text: input,

@@ -42,4 +42,5 @@ export interface UserProfile {
   full_name?: string;
   organization_id: string; // Link to the organization
   role: 'owner' | 'member' | 'admin';
+  twilio_phone_number?: string; // Persisted Twilio Number
 }
