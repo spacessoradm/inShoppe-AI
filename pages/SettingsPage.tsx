@@ -10,8 +10,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs'
 import { PLAN_LIMITS } from '../types';
 
 // --- CONFIGURATION START ---
-// DEMO: Paste your Stripe Publishable Key here to show "Connected" status.
-const STRIPE_PUBLISHABLE_KEY = ""; 
+const getStripeKey = () => {
+    try {
+        return (import.meta as any).env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+    } catch {
+        return "";
+    }
+};
 // --- CONFIGURATION END ---
 
 const SettingsPage: React.FC = () => {
@@ -20,15 +25,6 @@ const SettingsPage: React.FC = () => {
     const [name, setName] = useState(profile?.full_name || 'Merchant Name');
     const [inviteEmail, setInviteEmail] = useState('');
     
-    // Check key safely
-    const getStripeKey = () => {
-        try {
-            const env = (import.meta as any).env;
-            return STRIPE_PUBLISHABLE_KEY || env?.VITE_STRIPE_PUBLISHABLE_KEY;
-        } catch {
-            return STRIPE_PUBLISHABLE_KEY;
-        }
-    }
     const stripeKey = getStripeKey();
 
     const currentPlanLimit = organization ? PLAN_LIMITS[organization.plan] : 1;

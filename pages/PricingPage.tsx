@@ -11,7 +11,15 @@ import { supabase } from '../services/supabase';
 import { loadStripe } from '@stripe/stripe-js';
 
 // --- CONFIGURATION START ---
-const STRIPE_PUBLISHABLE_KEY = "pk_test_51SgbrxBKeQmYnrjTXQl56Q7mEq5cDZIK0SIxrAOaOMArfTpOgB03SOYOGrfl73iHD7hN0CWCVAcXrjUC7r4i9Qu6003ln3ypPc"; 
+const getStripeKey = () => {
+    try {
+        return (import.meta as any).env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+    } catch {
+        return "";
+    }
+};
+const STRIPE_PUBLISHABLE_KEY = getStripeKey();
+
 const PRICE_IDS = {
     STARTER: 'price_1SgdQ6BKeQmYnrjTBmjI2z2N',
     PRO: 'price_1SgdQdBKeQmYnrjTgfNNSUJo',
@@ -61,16 +69,7 @@ const PricingPage: React.FC = () => {
     const [processing, setProcessing] = useState<string | null>(null);
     const [successModal, setSuccessModal] = useState(false);
     
-    // Check key safely
-    const getStripeKey = () => {
-        try {
-            const env = (import.meta as any).env;
-            return STRIPE_PUBLISHABLE_KEY || env?.VITE_STRIPE_PUBLISHABLE_KEY;
-        } catch {
-            return STRIPE_PUBLISHABLE_KEY;
-        }
-    }
-    const stripeKey = getStripeKey();
+    const stripeKey = STRIPE_PUBLISHABLE_KEY;
 
     const handleSubscribe = async (tier: PricingTier) => {
         if (!user) {
