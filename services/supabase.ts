@@ -11,12 +11,12 @@ const getSupabaseConfig = () => {
         const env = (import.meta as any).env;
         return {
             url: (env?.VITE_SUPABASE_URL || "https://rwlecxyfukzberxcpqnr.supabase.co").trim(),
-            key: (env?.VITE_SUPABASE_ANON_KEY || "").trim()
+            key: (env?.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3bGVjeHlmdWt6YmVyeGNwcW5yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU2Njc0NDAsImV4cCI6MjA4MTI0MzQ0MH0.ruVmzOf92Gi0Cl8im5JfMWzPfC6z_LPfxFUKR4SivuM").trim()
         };
     } catch (e) {
         return {
             url: "https://rwlecxyfukzberxcpqnr.supabase.co",
-            key: ""
+            key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3bGVjeHlmdWt6YmVyeGNwcW5yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU2Njc0NDAsImV4cCI6MjA4MTI0MzQ0MH0.ruVmzOf92Gi0Cl8im5JfMWzPfC6z_LPfxFUKR4SivuM"
         };
     }
 };
