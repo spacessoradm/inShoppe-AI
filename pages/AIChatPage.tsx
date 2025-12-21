@@ -17,6 +17,7 @@ interface SimMessage {
   id: string;
   text: string;
   sender: 'user' | 'bot' | 'system';
+  direction?: 'inbound' | 'outbound';
   timestamp: string; // Display time
   fullTimestamp: number; // Sorting
   phone?: string; // Grouping
@@ -32,7 +33,7 @@ interface KnowledgeItem {
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
 const AIChatPage: React.FC = () => {
-    const { organization, deductCredit } = useAuth();
+    const { user, organization, deductCredit } = useAuth();
     const navigate = useNavigate();
 
     // --- View State ---
@@ -101,29 +102,28 @@ const AIChatPage: React.FC = () => {
             
             if (parsed.accountSid && parsed.authToken) {
                 setMode('dashboard');
-                // Defer knowledge fetch until org is ready if needed, 
-                // but useEffect dependencies will handle org ID check in fetching.
             } else {
                 setMode('landing');
             }
         }
     }, []);
 
-    // --- Effect: Load Knowledge Base (Isolated by Org) ---
+    // --- Effect: Load Knowledge Base (Shared by Org) ---
     useEffect(() => {
         if (!supabase || mode !== 'dashboard' || !organization) return;
         fetchKnowledgeBase();
     }, [mode, organization]);
 
-    // --- Effect: Realtime Subscription (Isolated by Org) ---
+    // --- Effect: Realtime Subscription (Isolated by User ID) ---
     useEffect(() => {
-        if (!supabase || mode !== 'dashboard' || !organization) return;
+        if (!supabase || mode !== 'dashboard' || !user) return;
 
         const fetchHistory = async () => {
+            // Updated: Fetch messages based on user_id, NOT organization_id
             const { data } = await supabase
                 .from('messages')
                 .select('*')
-                .eq('organization_id', organization.id) // IMPORTANT: Isolation
+                .eq('user_id', user.id) // IMPORTANT: User Isolation
                 .order('created_at', { ascending: false })
                 .limit(50);
 
@@ -131,7 +131,9 @@ const AIChatPage: React.FC = () => {
                 const formatted: SimMessage[] = data.reverse().map((msg: any) => ({
                     id: msg.id.toString(),
                     text: msg.text,
-                    sender: msg.sender === 'user' ? 'user' : 'bot',
+                    // Map direction to sender if direction exists, else fallback
+                    sender: msg.direction === 'inbound' ? 'user' : (msg.sender === 'user' ? 'user' : 'bot'),
+                    direction: msg.direction,
                     timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     fullTimestamp: new Date(msg.created_at).getTime(),
                     phone: msg.phone,
@@ -155,16 +157,17 @@ const AIChatPage: React.FC = () => {
                     event: 'INSERT', 
                     schema: 'public', 
                     table: 'messages',
-                    filter: `organization_id=eq.${organization.id}` // IMPORTANT: Isolation
+                    filter: `user_id=eq.${user.id}` // IMPORTANT: Listen for specific User ID
                 },
                 (payload) => {
                     const newMsg = payload.new;
-                    addLog(`Realtime: 📩 Message from ${newMsg.phone}`);
+                    addLog(`Realtime: 📩 New ${newMsg.direction} message`);
                     
                     const formattedMsg: SimMessage = {
                         id: newMsg.id.toString(),
                         text: newMsg.text,
-                        sender: newMsg.sender === 'user' ? 'user' : 'bot',
+                        sender: newMsg.direction === 'inbound' ? 'user' : 'bot',
+                        direction: newMsg.direction,
                         timestamp: new Date(newMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         fullTimestamp: new Date(newMsg.created_at).getTime(),
                         phone: newMsg.phone,
@@ -181,7 +184,7 @@ const AIChatPage: React.FC = () => {
             .subscribe();
 
         return () => { supabase.removeChannel(channel); };
-    }, [mode, webhookUrl, organization]);
+    }, [mode, webhookUrl, user]);
 
     // --- Auto Scroll ---
     useEffect(() => {
@@ -194,13 +197,34 @@ const AIChatPage: React.FC = () => {
         setLogs(prev => [`[${time}] ${text}`, ...prev.slice(0, 49)]);
     };
 
-    const handleSaveConfig = (e: React.FormEvent) => {
+    const handleSaveConfig = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
+
+        // 1. Save to Local Storage
+        localStorage.setItem('twilio_user_config', JSON.stringify({
+            accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
+        }));
+
+        // 2. Save Phone Mapping to Supabase Profile (Important for Webhook Routing)
+        if (supabase && user && myPhoneNumber) {
+             try {
+                const { error } = await supabase
+                    .from('profiles')
+                    .update({ twilio_phone_number: myPhoneNumber })
+                    .eq('id', user.id);
+                
+                if (error) {
+                    addLog(`Error: Failed to link phone number to profile: ${error.message}`);
+                } else {
+                    addLog('System: Phone number linked to User Profile.');
+                }
+             } catch (err) {
+                 console.error("Profile update failed", err);
+             }
+        }
+
         setTimeout(() => {
-            localStorage.setItem('twilio_user_config', JSON.stringify({
-                accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
-            }));
             setLoading(false);
             setMode('dashboard');
             addLog('System: Configuration saved.');
@@ -211,7 +235,7 @@ const AIChatPage: React.FC = () => {
     
     const fetchKnowledgeBase = async () => {
         if (!supabase || !organization) return;
-        // Filter by organization_id is handled by RLS, but adding .eq is explicit/safe
+        // Knowledge is still tied to Organization ID (Shared context)
         const { data } = await supabase
             .from('knowledge')
             .select('id, content')
@@ -225,13 +249,10 @@ const AIChatPage: React.FC = () => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        // Visual feedback
         addLog(`System: Parsing ${file.name}...`);
-
         const reader = new FileReader();
         reader.onload = async (event) => {
             const text = event.target?.result as string;
-            // Truncate for demo if too huge, but usually we split into chunks
             setKnowledgeInput(text.slice(0, 5000));
             addLog(`System: Extracted ${text.length} chars. Ready to vectorize.`);
         };
@@ -240,14 +261,9 @@ const AIChatPage: React.FC = () => {
 
     const getAiClient = () => {
         try {
-            // Safely try to get key from import.meta.env
             const env = (import.meta as any).env;
             const apiKey = env?.VITE_GOOGLE_API_KEY || (typeof process !== 'undefined' ? process.env?.API_KEY : undefined);
-            
-            if (!apiKey) {
-                addLog("Error: Missing API Key. Set VITE_GOOGLE_API_KEY in .env or API_KEY in process.");
-                throw new Error("Missing API Key");
-            }
+            if (!apiKey) throw new Error("Missing API Key");
             return new GoogleGenAI({ apiKey });
         } catch (e) {
             console.error("Failed to init AI client", e);
@@ -258,12 +274,10 @@ const AIChatPage: React.FC = () => {
     const addKnowledge = async () => {
         if (!knowledgeInput.trim() || !supabase || !organization) return;
         setIsEmbedding(true);
-        addLog("System: Vectorizing content (generating embeddings)...");
+        addLog("System: Vectorizing content...");
 
         try {
             const ai = getAiClient();
-            
-            // 1. Generate Embedding
             const embeddingResult = await ai.models.embedContent({
                 model: "text-embedding-004",
                 contents: knowledgeInput,
@@ -272,7 +286,6 @@ const AIChatPage: React.FC = () => {
 
             if (!embedding) throw new Error("Failed to generate embedding");
 
-            // 2. Store in Supabase (with Org ID)
             const { error } = await supabase.from('knowledge').insert({
                 organization_id: organization.id,
                 content: knowledgeInput,
@@ -280,16 +293,12 @@ const AIChatPage: React.FC = () => {
             });
 
             if (error) throw error;
-
             addLog("System: Knowledge saved to Vector DB.");
             setKnowledgeInput('');
             fetchKnowledgeBase();
 
         } catch (err: any) {
             addLog(`Error: ${err.message}`);
-            if (err.message.includes("relation \"knowledge\" does not exist")) {
-                 alert("Please run the SQL script in the 'Webhook Status' tab to create the knowledge table.");
-            }
         } finally {
             setIsEmbedding(false);
         }
@@ -316,10 +325,12 @@ const AIChatPage: React.FC = () => {
 
         const targetPhone = selectedPhone || '+60123456789';
 
+        // 1. Display User Message (Inbound Simulation)
         const userMsg: SimMessage = {
             id: Date.now().toString(),
             text: input,
             sender: 'user', 
+            direction: 'inbound', // Mark as Received
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             fullTimestamp: Date.now(),
             phone: targetPhone
@@ -327,67 +338,57 @@ const AIChatPage: React.FC = () => {
 
         setMessages(prev => [...prev, userMsg]);
         setInput('');
+
+        // 2. Save User Message to DB (Simulation Mode)
+        if (supabase && user && webhookUrl) {
+             // In simulation mode with a webhook URL, we might want to save to DB to trigger the Realtime subscription
+             // For purely client-side simulation, we skip this if not strictly needed, 
+             // but let's save it to test the user_id isolation.
+             await supabase.from('messages').insert({
+                user_id: user.id,
+                text: input,
+                sender: 'user',
+                direction: 'inbound',
+                phone: targetPhone,
+                intent_tag: 'Simulation'
+             });
+        }
         
         await new Promise(resolve => setTimeout(resolve, 500)); 
         
         try {
             const ai = getAiClient();
             
-            // 1. Semantic Search (RAG)
+            // 3. Semantic Search (RAG)
             let contextText = "No specific knowledge found in uploaded files.";
             
             if (supabase && organization) {
-                // Embed the query
                 const embeddingResult = await ai.models.embedContent({
                     model: "text-embedding-004",
                     contents: userMsg.text,
                 });
-
                 const queryEmbedding = embeddingResult.embeddings?.[0]?.values;
                 
                 if (queryEmbedding) {
-                    // Search DB (Supabase RPC function usually ignores RLS for rpc calls unless configured otherwise, 
-                    // but we should technically pass OrgID if we modified match_knowledge.
-                    // However, for simplicity here, we assume match_knowledge might return mixed results 
-                    // unless we updated it to filter by OrgID. 
-                    // Ideally, match_knowledge SQL should be: where organization_id = passed_org_id ...)
-                    
-                    // For now, we rely on the vector similarity. 
-                    // TODO: Update match_knowledge in SQL to accept organization_id argument for strict isolation.
-                    const { data: searchResults, error } = await supabase.rpc('match_knowledge', {
+                    const { data: searchResults } = await supabase.rpc('match_knowledge', {
                         query_embedding: queryEmbedding,
-                        match_threshold: 0.5, // Similarity threshold
+                        match_threshold: 0.5,
                         match_count: 3
                     });
-
-                    // FILTER results client-side if RPC doesn't support org_id filtering yet (Temporary fix for isolation)
-                    // Note: Ideally update SQL RPC function.
-                    // Assuming we proceed with what we have.
 
                     if (searchResults && searchResults.length > 0) {
                         addLog(`System: Found ${searchResults.length} relevant knowledge chunks.`);
                         contextText = searchResults.map((r: any) => r.content).join("\n---\n");
-                    } else {
-                        addLog("System: No relevant context found in Vector DB.");
                     }
                 }
             }
 
-            // 2. Generate Answer
+            // 4. Generate Answer
             const ragPrompt = `
             SYSTEM: ${systemInstruction}
-            
-            RELEVANT KNOWLEDGE BASE CONTEXT:
-            ${contextText}
-
+            RELEVANT CONTEXT: ${contextText}
             USER QUERY: ${userMsg.text}
-            
-            INSTRUCTIONS:
-            - Use the Context above to answer.
-            - If the context contains the answer, reply naturally.
-            - If the context DOES NOT contain the answer, politely decline or ask for clarification.
-            
-            ANSWER:
+            INSTRUCTIONS: Use Context to answer. If unsure, say "Please contact support".
             `;
 
             const response = await ai.models.generateContent({
@@ -401,6 +402,7 @@ const AIChatPage: React.FC = () => {
                 id: (Date.now() + 1).toString(),
                 text: replyText,
                 sender: 'bot',
+                direction: 'outbound', // Mark as Sent
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 fullTimestamp: Date.now() + 1,
                 phone: targetPhone,
@@ -409,13 +411,16 @@ const AIChatPage: React.FC = () => {
             
             setMessages(prev => [...prev, botMsg]);
 
-            // OPTIONAL: If using simulator in live mode, we could insert into DB here to test persistence
-            // if (supabase && organization && webhookUrl) {
-            //     await supabase.from('messages').insert([
-            //         { text: input, sender: 'user', phone: targetPhone, organization_id: organization.id },
-            //         { text: replyText, sender: 'bot', phone: targetPhone, organization_id: organization.id }
-            //     ]);
-            // }
+            // 5. Save Bot Message to DB
+            if (supabase && user && webhookUrl) {
+                await supabase.from('messages').insert({
+                   user_id: user.id,
+                   text: replyText,
+                   sender: 'bot',
+                   direction: 'outbound',
+                   phone: targetPhone
+                });
+           }
 
         } catch (error) {
             console.error(error);
@@ -503,9 +508,13 @@ const AIChatPage: React.FC = () => {
                                     </div>
                                 </div>
                                 <div className="space-y-2">
+                                    <label className="text-sm font-medium">Your Twilio Phone Number</label>
+                                    <Input required value={myPhoneNumber} onChange={e => setMyPhoneNumber(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono text-blue-300" placeholder="+1234567890" />
+                                    <p className="text-xs text-slate-500">Must match the number in your Twilio account exactly (e.g., +15551234567). This maps incoming messages to your user ID.</p>
+                                </div>
+                                <div className="space-y-2">
                                     <label className="text-sm font-medium">Webhook URL (Optional for Simulator)</label>
-                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 text-blue-300 font-mono" placeholder="https://..." />
-                                    <p className="text-xs text-slate-500">Leave blank to use internal Simulator only.</p>
+                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" placeholder="https://..." />
                                 </div>
                                 <div className="space-y-2 pt-4 border-t border-slate-800">
                                     <label className="text-sm font-medium">System Instructions (AI Personality)</label>
@@ -514,7 +523,7 @@ const AIChatPage: React.FC = () => {
                             </CardContent>
                             <CardFooter>
                                 <Button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-500 w-full">
-                                    {loading ? 'Validating...' : 'Save & Connect'}
+                                    {loading ? 'Validating & Linking...' : 'Save & Connect'}
                                 </Button>
                             </CardFooter>
                         </form>
@@ -595,7 +604,7 @@ const AIChatPage: React.FC = () => {
                                             <span className="text-[10px] text-slate-500">{msgs[msgs.length-1].timestamp}</span>
                                         </div>
                                         <p className="text-xs text-slate-400 truncate pr-2">
-                                            {msgs[msgs.length-1].sender === 'bot' ? 'You: ' : ''}
+                                            {msgs[msgs.length-1].direction === 'outbound' ? 'You: ' : ''}
                                             {msgs[msgs.length-1].text}
                                         </p>
                                     </div>
@@ -623,15 +632,18 @@ const AIChatPage: React.FC = () => {
                                     {/* Messages Area */}
                                     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[url('https://i.pinimg.com/originals/97/c0/07/97c00759d90d786d9b6096d274ad3e07.png')] bg-repeat bg-[length:400px]">
                                         {(chats.find(([p]) => p === selectedPhone)?.[1] || []).map(msg => (
-                                            <div key={msg.id} className={cn("flex w-full", msg.sender === 'bot' ? "justify-end" : "justify-start")}>
+                                            <div key={msg.id} className={cn("flex w-full", msg.direction === 'outbound' ? "justify-end" : "justify-start")}>
                                                  <div className={cn(
                                                     "max-w-[70%] rounded-lg px-3 py-2 text-sm shadow-sm relative",
-                                                    msg.sender === 'bot' ? "bg-[#005c4b] text-white rounded-tr-none" : 
+                                                    msg.direction === 'outbound' ? "bg-[#005c4b] text-white rounded-tr-none" : 
                                                     msg.sender === 'system' ? "bg-red-900/50 text-red-200 border border-red-800" :
                                                     "bg-slate-800 text-slate-200 rounded-tl-none"
                                                 )}>
                                                     {msg.text}
-                                                    <span className="text-[10px] text-white/50 block text-right mt-1">{msg.timestamp}</span>
+                                                    <div className="flex justify-between items-center mt-1 gap-2">
+                                                        <span className="text-[9px] text-white/40 uppercase">{msg.direction}</span>
+                                                        <span className="text-[10px] text-white/50">{msg.timestamp}</span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         ))}
