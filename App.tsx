@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -9,7 +10,6 @@ import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
 import PricingPage from './pages/PricingPage';
 import CRMPage from './pages/CRMPage';
-import WBAChatPage from './pages/WBAChatPage';
 import AIChatPage from './pages/AIChatPage';
 
 const App: React.FC = () => {
@@ -73,7 +73,6 @@ const AppRoutes: React.FC = () => {
         <Route path="crm" element={<CRMPage />} />
         <Route path="chat" element={<ChatConsolePage />} />
         <Route path="chat/:chatId" element={<ChatConsolePage />} />
-        <Route path="wba" element={<WBAChatPage />} />
         <Route path="ai-chat" element={<AIChatPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

@@ -73,16 +73,6 @@ const ConsoleLayout: React.FC = () => {
               <UsersIcon className="h-4 w-4" />
               Chats
             </NavLink>
-             <NavLink 
-              to="/console/wba" 
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
-                isActive ? "bg-primary text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
-              )}
-            >
-              <GlobeIcon className="h-4 w-4" />
-              WBA Chat
-            </NavLink>
             <NavLink 
               to="/console/ai-chat" 
               className={({ isActive }) => cn(
