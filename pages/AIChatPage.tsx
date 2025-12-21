@@ -219,13 +219,30 @@ const AIChatPage: React.FC = () => {
         reader.readAsText(file);
     };
 
+    const getAiClient = () => {
+        try {
+            // Safely try to get key from import.meta.env
+            const env = (import.meta as any).env;
+            const apiKey = env?.VITE_GOOGLE_API_KEY || (typeof process !== 'undefined' ? process.env?.API_KEY : undefined);
+            
+            if (!apiKey) {
+                addLog("Error: Missing API Key. Set VITE_GOOGLE_API_KEY in .env or API_KEY in process.");
+                throw new Error("Missing API Key");
+            }
+            return new GoogleGenAI({ apiKey });
+        } catch (e) {
+            console.error("Failed to init AI client", e);
+            throw e;
+        }
+    };
+
     const addKnowledge = async () => {
         if (!knowledgeInput.trim() || !supabase) return;
         setIsEmbedding(true);
         addLog("System: Vectorizing content (generating embeddings)...");
 
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = getAiClient();
             
             // 1. Generate Embedding
             const embeddingResult = await ai.models.embedContent({
@@ -294,7 +311,7 @@ const AIChatPage: React.FC = () => {
         await new Promise(resolve => setTimeout(resolve, 500)); 
         
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = getAiClient();
             
             // 1. Semantic Search (RAG)
             let contextText = "No specific knowledge found in uploaded files.";

@@ -18,8 +18,16 @@ const SettingsPage: React.FC = () => {
     const navigate = useNavigate();
     const [name, setName] = useState(profile?.full_name || 'Merchant Name');
     
-    // Check key
-    const stripeKey = STRIPE_PUBLISHABLE_KEY || (import.meta as any).env.VITE_STRIPE_PUBLISHABLE_KEY;
+    // Check key safely
+    const getStripeKey = () => {
+        try {
+            const env = (import.meta as any).env;
+            return STRIPE_PUBLISHABLE_KEY || env?.VITE_STRIPE_PUBLISHABLE_KEY;
+        } catch {
+            return STRIPE_PUBLISHABLE_KEY;
+        }
+    }
+    const stripeKey = getStripeKey();
 
     return (
         <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">

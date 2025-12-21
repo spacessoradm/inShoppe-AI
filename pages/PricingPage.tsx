@@ -61,8 +61,16 @@ const PricingPage: React.FC = () => {
     const [processing, setProcessing] = useState<string | null>(null);
     const [successModal, setSuccessModal] = useState(false);
     
-    // Prefer the hardcoded key for demo, fallback to env variable
-    const stripeKey = STRIPE_PUBLISHABLE_KEY || (import.meta as any).env.VITE_STRIPE_PUBLISHABLE_KEY;
+    // Check key safely
+    const getStripeKey = () => {
+        try {
+            const env = (import.meta as any).env;
+            return STRIPE_PUBLISHABLE_KEY || env?.VITE_STRIPE_PUBLISHABLE_KEY;
+        } catch {
+            return STRIPE_PUBLISHABLE_KEY;
+        }
+    }
+    const stripeKey = getStripeKey();
 
     const handleSubscribe = async (tier: PricingTier) => {
         if (!user) {
