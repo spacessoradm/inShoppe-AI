@@ -261,10 +261,10 @@ const AIChatPage: React.FC = () => {
                     }).eq('id', user.id);
                 };
 
-                // Race against a 3-second timeout
+                // Race against a 6-second timeout (Increased from 3s)
                 await Promise.race([
                     saveOperation(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("Database save timed out")), 3000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Database save timed out")), 6000))
                 ]);
                 
                 addLog('System: Settings saved to Database.');
@@ -273,11 +273,20 @@ const AIChatPage: React.FC = () => {
             }
         } catch (err: any) {
              console.error("Config save failed", err);
-             addLog(`Warning: Cloud save failed (${err.message}). Saved locally.`);
+             // More informative error log
+             if (err.message?.includes('relation "user_settings" does not exist')) {
+                 addLog('Error: "user_settings" table missing. Please run the SQL Setup Script.');
+             } else {
+                 addLog(`Warning: Cloud save failed (${err.message}). Saved locally.`);
+             }
         } finally {
             // Ensure we ALWAYS exit the loading state and proceed to dashboard
-            setLoading(false);
-            setMode('dashboard');
+            // Wait slightly longer for user to read log
+            setTimeout(() => {
+                setLoading(false);
+                setMode('dashboard');
+                addLog('System: Configuration saved.');
+            }, 1000);
         }
     };
 
