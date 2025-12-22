@@ -116,51 +116,22 @@ const AIChatPage: React.FC = () => {
                     .from('user_settings')
                     .select('*')
                     .eq('user_id', user.id)
-                    .maybeSingle();
-
-                    if (error) {
-                    console.error('Failed to load user_settings:', error.message);
-                    return;
-                    }
-
-                    // 👉 No record yet → create one
-                    let settings = data;
-
-                    if (!settings) {
-                    const { data: inserted, error: insertError } = await supabase
-                        .from('user_settings')
-                        .insert({
-                        user_id: user.id,
-                        // put defaults here if needed
-                        system_instruction: null,
-                        })
-                        .select('*')
-                        .single();
-
-                    if (insertError) {
-                        console.error('Failed to create user_settings:', insertError.message);
-                        return;
-                    }
-
-                    settings = inserted;
-                    }
-
-                    // 👉 Safe state hydration
-                    setAccountSid(settings.twilio_account_sid ?? '');
-                    setAuthToken(settings.twilio_auth_token ?? '');
-                    setMyPhoneNumber(settings.twilio_phone_number ?? '');
-                    setWebhookUrl(settings.webhook_url ?? '');
-                    setSystemInstruction(settings.system_instruction ?? '');
+                    .single();
+                
+                if (data) {
+                    setAccountSid(data.twilio_account_sid || '');
+                    setAuthToken(data.twilio_auth_token || '');
+                    setMyPhoneNumber(data.twilio_phone_number || '');
+                    setWebhookUrl(data.webhook_url || '');
+                    if (data.system_instruction) setSystemInstruction(data.system_instruction);
 
                     // Auto-enter dashboard if configured
-                    if (
-                    settings.twilio_account_sid &&
-                    settings.twilio_phone_number &&
-                    mode === 'landing'
-                    ) {
-                    setMode('dashboard');
+                    if (data.twilio_account_sid && data.twilio_phone_number && mode === 'landing') {
+                        setMode('dashboard');
                     }
-
+                } else if (error && error.code !== 'PGRST116') { // PGRST116 is "Row not found" - ignore
+                     console.warn("Failed to load user_settings:", error.message);
+                }
             } catch (err) {
                 console.error("Error loading config:", err);
             }
@@ -259,70 +230,89 @@ const AIChatPage: React.FC = () => {
     };
 
     const handleSaveConfig = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
+    e.preventDefault();
+    setLoading(true);
 
-        try {
-            // 1. Sync to Local Storage first (Backup)
-            localStorage.setItem('twilio_user_config', JSON.stringify({
-                accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
-            }));
+    try {
+        // 1️⃣ Local backup (always succeeds)
+        localStorage.setItem(
+        'twilio_user_config',
+        JSON.stringify({
+            accountSid,
+            authToken,
+            phoneNumber: myPhoneNumber,
+            systemInstruction,
+            webhookUrl,
+        })
+        );
 
-            // 2. Database Sync
-            if (supabase && user) {
-                const saveToCloud = async () => {
-                    // This will throw if the table doesn't exist or DB is down
-                    const { error } = await supabase.from('user_settings').upsert({
-                        user_id: user.id,
-                        twilio_account_sid: accountSid,
-                        twilio_auth_token: authToken,
-                        twilio_phone_number: myPhoneNumber,
-                        webhook_url: webhookUrl,
-                        system_instruction: systemInstruction,
-                        updated_at: new Date().toISOString()
-                    });
-                    
-                    if (error) throw error;
-                    
-                    // Legacy sync for backward compatibility
-                    await supabase.from('profiles').update({
-                        twilio_phone_number: myPhoneNumber
-                    }).eq('id', user.id);
-                };
+        if (supabase && user) {
+        const saveToCloud = async () => {
+            const { data, error } = await supabase
+            .from('user_settings')
+            .upsert(
+                {
+                user_id: user.id,
+                twilio_account_sid: accountSid,
+                twilio_auth_token: authToken,
+                twilio_phone_number: myPhoneNumber,
+                webhook_url: webhookUrl,
+                system_instruction: systemInstruction,
+                updated_at: new Date().toISOString(),
+                },
+                {
+                onConflict: 'user_id',
+                }
+            )
+            .select('*')
+            .single();
 
-                // Wait up to 15 seconds for DB to wake up/respond
-                await Promise.race([
-                    saveToCloud(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("Database connection timed out")), 15000))
-                ]);
-                
-                addLog('System: Configuration saved to Cloud Database.');
-            } else {
-                addLog('System: Configuration saved locally (Demo Mode).');
-            }
+            if (error) throw error;
 
-            // Success -> Move to Dashboard
-            setMode('dashboard');
-        } catch (err: any) {
-            console.error("Config save failed", err);
-            
-            // Check for specific Supabase/Postgres errors
-            // 42P01 is the code for "undefined_table"
-            if (err.code === '42P01' || err.message?.includes('user_settings')) {
-                addLog('CRITICAL ERROR: The database table "user_settings" does not exist.');
-                addLog('ACTION REQUIRED: Please copy the SQL script from the "Status" tab and run it in the Supabase SQL Editor.');
-                // Don't switch view, force user to see the error
-                setLoading(false);
-                return; 
-            }
+            // Legacy sync (non-critical)
+            await supabase
+            .from('profiles')
+            .update({ twilio_phone_number: myPhoneNumber })
+            .eq('id', user.id);
 
-            addLog(`Warning: Saved locally. Cloud sync failed (${err.message}).`);
-            // If it's just a timeout or network error, we let them proceed
-            setMode('dashboard');
-        } finally {
-            setLoading(false);
+            return data;
+        };
+
+        await Promise.race([
+            saveToCloud(),
+            new Promise((_, reject) =>
+            setTimeout(
+                () => reject(new Error('Database connection timed out')),
+                15000
+            )
+            ),
+        ]);
+
+        addLog('System: Configuration saved to Cloud Database.');
+        } else {
+        addLog('System: Configuration saved locally (Demo Mode).');
         }
+
+        setMode('dashboard');
+    } catch (err: any) {
+        console.error('Config save failed', err);
+
+        if (err.code === '42P01') {
+        addLog('CRITICAL ERROR: The table "user_settings" does not exist.');
+        addLog(
+            'ACTION REQUIRED: Run the SQL migration from the Status tab in Supabase.'
+        );
+        setLoading(false);
+        return;
+        }
+
+        addLog(`Warning: Saved locally. Cloud sync failed (${err.message}).`);
+        setMode('dashboard');
+    } finally {
+        setLoading(false);
+    }
     };
+
 
     // --- Knowledge Base Logic (RAG) ---
     
