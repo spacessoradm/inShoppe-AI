@@ -30,7 +30,7 @@ create table if not exists profiles (
   full_name text,
   organization_id uuid references organizations(id),
   role text default 'owner',
-  twilio_phone_number text, -- Linked Phone Number for Inbound Routing
+  twilio_phone_number text, -- Linked Phone Number for Inbound Routing (Legacy/Quick Access)
   created_at timestamptz default now()
 );
 
@@ -88,7 +88,18 @@ create table if not exists knowledge (
   embedding vector(768)
 );
 
--- 7. Vector Search Function
+-- 7. Create User Settings Table (NEW: For Twilio Config Management)
+create table if not exists user_settings (
+  user_id uuid references auth.users(id) primary key,
+  twilio_account_sid text,
+  twilio_auth_token text,
+  twilio_phone_number text,
+  webhook_url text,
+  system_instruction text,
+  updated_at timestamptz default now()
+);
+
+-- 8. Vector Search Function
 create or replace function match_knowledge (
   query_embedding vector(768),
   match_threshold float,
@@ -114,14 +125,15 @@ begin
 end;
 $$;
 
--- 8. Enable RLS
+-- 9. Enable RLS
 alter table profiles enable row level security;
 alter table organizations enable row level security;
 alter table messages enable row level security;
 alter table knowledge enable row level security;
 alter table early_access_signups enable row level security;
+alter table user_settings enable row level security;
 
--- 9. RLS Policies
+-- 10. RLS Policies
 
 -- Profiles
 drop policy if exists "Public profiles access" on profiles;
@@ -167,11 +179,16 @@ create policy "Org members can insert knowledge" on knowledge for insert with ch
   organization_id in (select organization_id from profiles where profiles.id = auth.uid())
 );
 
+-- User Settings (Private to User)
+drop policy if exists "Users can manage own settings" on user_settings;
+create policy "Users can manage own settings" on user_settings
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 -- Signups (Public)
 drop policy if exists "Public insert signups" on early_access_signups;
 create policy "Public insert signups" on early_access_signups for insert with check (true);
 
--- 10. AUTOMATIC ONBOARDING TRIGGER
+-- 11. AUTOMATIC ONBOARDING TRIGGER
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -198,6 +215,9 @@ begin
     new_org_id,
     'owner'
   );
+  
+  -- Init empty settings
+  insert into public.user_settings (user_id) values (new.id);
 
   return new;
 end;

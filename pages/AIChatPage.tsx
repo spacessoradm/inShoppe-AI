@@ -89,38 +89,56 @@ const AIChatPage: React.FC = () => {
         });
     }, [messages]);
 
-    // --- Effect: Load Config from LocalStorage ---
+    // --- Effect: Load Config from Database (user_settings) ---
     useEffect(() => {
-        const savedConfig = localStorage.getItem('twilio_user_config');
-        if (savedConfig) {
-            const parsed = JSON.parse(savedConfig);
-            setAccountSid(parsed.accountSid || '');
-            setAuthToken(parsed.authToken || '');
-            // We set phone number here, but Profile DB takes precedence below
-            if (!myPhoneNumber) setMyPhoneNumber(parsed.phoneNumber || ''); 
-            setWebhookUrl(parsed.webhookUrl || '');
-            if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
-            
-            // If we have credentials locally, go to dashboard
-            if (parsed.accountSid && parsed.authToken) {
-                setMode('dashboard');
+        const loadConfig = async () => {
+            if (!supabase || !user) {
+                // Fallback to LocalStorage if user not logged in or Supabase missing
+                const savedConfig = localStorage.getItem('twilio_user_config');
+                if (savedConfig) {
+                    const parsed = JSON.parse(savedConfig);
+                    setAccountSid(parsed.accountSid || '');
+                    setAuthToken(parsed.authToken || '');
+                    setMyPhoneNumber(parsed.phoneNumber || ''); 
+                    setWebhookUrl(parsed.webhookUrl || '');
+                    if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
+                    
+                    if (parsed.accountSid && parsed.authToken) {
+                        setMode('dashboard');
+                    }
+                }
+                return;
             }
-        }
-    }, []);
 
-    // --- Effect: Load Config from DB Profile (Persistence across devices) ---
-    useEffect(() => {
-        if (profile?.twilio_phone_number) {
-            console.log("Syncing Phone from Profile:", profile.twilio_phone_number);
-            setMyPhoneNumber(profile.twilio_phone_number);
-            
-            // If user has a linked number in DB, allow access to dashboard immediately (Simulator Mode)
-            // even if they haven't re-entered SID/Token on this specific device yet.
-            if (mode === 'landing') {
-                setMode('dashboard');
+            try {
+                // Try fetching from the new user_settings table
+                const { data, error } = await supabase
+                    .from('user_settings')
+                    .select('*')
+                    .eq('user_id', user.id)
+                    .single();
+                
+                if (data) {
+                    setAccountSid(data.twilio_account_sid || '');
+                    setAuthToken(data.twilio_auth_token || '');
+                    setMyPhoneNumber(data.twilio_phone_number || '');
+                    setWebhookUrl(data.webhook_url || '');
+                    if (data.system_instruction) setSystemInstruction(data.system_instruction);
+
+                    // Auto-enter dashboard if configured
+                    if (data.twilio_account_sid && data.twilio_phone_number && mode === 'landing') {
+                        setMode('dashboard');
+                    }
+                } else if (error && error.code !== 'PGRST116') { // PGRST116 is "Row not found" - ignore
+                     console.warn("Failed to load user_settings:", error.message);
+                }
+            } catch (err) {
+                console.error("Error loading config:", err);
             }
-        }
-    }, [profile, mode]);
+        };
+
+        loadConfig();
+    }, [user, mode]);
 
     // --- Effect: Load Knowledge Base (Shared by Org) ---
     useEffect(() => {
@@ -216,37 +234,50 @@ const AIChatPage: React.FC = () => {
         setLoading(true);
 
         try {
-            // 1. Save to Local Storage (Client preference)
+            // Local fallback
             localStorage.setItem('twilio_user_config', JSON.stringify({
                 accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
             }));
 
-            // 2. Save Phone Mapping to Supabase Profile (Server persistence)
-            if (supabase && user && myPhoneNumber) {
-                const { error } = await supabase
-                    .from('profiles')
-                    .update({ twilio_phone_number: myPhoneNumber })
-                    .eq('id', user.id);
+            if (supabase && user) {
+                // Add a Timeout Race to prevent hanging if DB is unreachable
+                const saveOperation = async () => {
+                    // Upsert into the new user_settings table
+                    const { error } = await supabase.from('user_settings').upsert({
+                        user_id: user.id,
+                        twilio_account_sid: accountSid,
+                        twilio_auth_token: authToken,
+                        twilio_phone_number: myPhoneNumber,
+                        webhook_url: webhookUrl,
+                        system_instruction: systemInstruction,
+                        updated_at: new Date().toISOString()
+                    });
+                    
+                    if (error) throw error;
+                    
+                    // Also sync phone number to profile for legacy compatibility
+                    await supabase.from('profiles').update({
+                        twilio_phone_number: myPhoneNumber
+                    }).eq('id', user.id);
+                };
+
+                // Race against a 3-second timeout
+                await Promise.race([
+                    saveOperation(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Database save timed out")), 3000))
+                ]);
                 
-                if (error) {
-                    addLog(`Error: Failed to link phone number: ${error.message}`);
-                    console.error("Profile update failed", error);
-                } else {
-                    addLog('System: Phone number linked to User Profile.');
-                }
-            } else if (!supabase) {
-                addLog('System: Supabase disconnected. Saved locally only.');
+                addLog('System: Settings saved to Database.');
+            } else {
+                addLog('System: Settings saved locally (Demo Mode).');
             }
         } catch (err: any) {
              console.error("Config save failed", err);
-             addLog(`Error: ${err.message || 'Unknown error during save'}`);
+             addLog(`Warning: Cloud save failed (${err.message}). Saved locally.`);
         } finally {
-            // Always transition to dashboard, even if API fails or times out
-            setTimeout(() => {
-                setLoading(false);
-                setMode('dashboard');
-                addLog('System: Configuration saved.');
-            }, 800);
+            // Ensure we ALWAYS exit the loading state and proceed to dashboard
+            setLoading(false);
+            setMode('dashboard');
         }
     };
 
