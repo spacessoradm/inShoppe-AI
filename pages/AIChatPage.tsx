@@ -116,22 +116,51 @@ const AIChatPage: React.FC = () => {
                     .from('user_settings')
                     .select('*')
                     .eq('user_id', user.id)
-                    .single();
-                
-                if (data) {
-                    setAccountSid(data.twilio_account_sid || '');
-                    setAuthToken(data.twilio_auth_token || '');
-                    setMyPhoneNumber(data.twilio_phone_number || '');
-                    setWebhookUrl(data.webhook_url || '');
-                    if (data.system_instruction) setSystemInstruction(data.system_instruction);
+                    .maybeSingle();
+
+                    if (error) {
+                    console.error('Failed to load user_settings:', error.message);
+                    return;
+                    }
+
+                    // 👉 No record yet → create one
+                    let settings = data;
+
+                    if (!settings) {
+                    const { data: inserted, error: insertError } = await supabase
+                        .from('user_settings')
+                        .insert({
+                        user_id: user.id,
+                        // put defaults here if needed
+                        system_instruction: null,
+                        })
+                        .select('*')
+                        .single();
+
+                    if (insertError) {
+                        console.error('Failed to create user_settings:', insertError.message);
+                        return;
+                    }
+
+                    settings = inserted;
+                    }
+
+                    // 👉 Safe state hydration
+                    setAccountSid(settings.twilio_account_sid ?? '');
+                    setAuthToken(settings.twilio_auth_token ?? '');
+                    setMyPhoneNumber(settings.twilio_phone_number ?? '');
+                    setWebhookUrl(settings.webhook_url ?? '');
+                    setSystemInstruction(settings.system_instruction ?? '');
 
                     // Auto-enter dashboard if configured
-                    if (data.twilio_account_sid && data.twilio_phone_number && mode === 'landing') {
-                        setMode('dashboard');
+                    if (
+                    settings.twilio_account_sid &&
+                    settings.twilio_phone_number &&
+                    mode === 'landing'
+                    ) {
+                    setMode('dashboard');
                     }
-                } else if (error && error.code !== 'PGRST116') { // PGRST116 is "Row not found" - ignore
-                     console.warn("Failed to load user_settings:", error.message);
-                }
+
             } catch (err) {
                 console.error("Error loading config:", err);
             }
@@ -234,15 +263,15 @@ const AIChatPage: React.FC = () => {
         setLoading(true);
 
         try {
-            // Local fallback
+            // 1. Sync to Local Storage first (Backup)
             localStorage.setItem('twilio_user_config', JSON.stringify({
                 accountSid, authToken, phoneNumber: myPhoneNumber, systemInstruction, webhookUrl
             }));
 
+            // 2. Database Sync
             if (supabase && user) {
-                // Add a Timeout Race to prevent hanging if DB is unreachable
-                const saveOperation = async () => {
-                    // Upsert into the new user_settings table
+                const saveToCloud = async () => {
+                    // This will throw if the table doesn't exist or DB is down
                     const { error } = await supabase.from('user_settings').upsert({
                         user_id: user.id,
                         twilio_account_sid: accountSid,
@@ -255,38 +284,43 @@ const AIChatPage: React.FC = () => {
                     
                     if (error) throw error;
                     
-                    // Also sync phone number to profile for legacy compatibility
+                    // Legacy sync for backward compatibility
                     await supabase.from('profiles').update({
                         twilio_phone_number: myPhoneNumber
                     }).eq('id', user.id);
                 };
 
-                // Race against a 6-second timeout (Increased from 3s)
+                // Wait up to 15 seconds for DB to wake up/respond
                 await Promise.race([
-                    saveOperation(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("Database save timed out")), 6000))
+                    saveToCloud(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Database connection timed out")), 15000))
                 ]);
                 
-                addLog('System: Settings saved to Database.');
+                addLog('System: Configuration saved to Cloud Database.');
             } else {
-                addLog('System: Settings saved locally (Demo Mode).');
+                addLog('System: Configuration saved locally (Demo Mode).');
             }
+
+            // Success -> Move to Dashboard
+            setMode('dashboard');
         } catch (err: any) {
-             console.error("Config save failed", err);
-             // More informative error log
-             if (err.message?.includes('relation "user_settings" does not exist')) {
-                 addLog('Error: "user_settings" table missing. Please run the SQL Setup Script.');
-             } else {
-                 addLog(`Warning: Cloud save failed (${err.message}). Saved locally.`);
-             }
-        } finally {
-            // Ensure we ALWAYS exit the loading state and proceed to dashboard
-            // Wait slightly longer for user to read log
-            setTimeout(() => {
+            console.error("Config save failed", err);
+            
+            // Check for specific Supabase/Postgres errors
+            // 42P01 is the code for "undefined_table"
+            if (err.code === '42P01' || err.message?.includes('user_settings')) {
+                addLog('CRITICAL ERROR: The database table "user_settings" does not exist.');
+                addLog('ACTION REQUIRED: Please copy the SQL script from the "Status" tab and run it in the Supabase SQL Editor.');
+                // Don't switch view, force user to see the error
                 setLoading(false);
-                setMode('dashboard');
-                addLog('System: Configuration saved.');
-            }, 1000);
+                return; 
+            }
+
+            addLog(`Warning: Saved locally. Cloud sync failed (${err.message}).`);
+            // If it's just a timeout or network error, we let them proceed
+            setMode('dashboard');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -579,7 +613,7 @@ const AIChatPage: React.FC = () => {
                             </CardContent>
                             <CardFooter>
                                 <Button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-500 w-full">
-                                    {loading ? 'Validating & Linking...' : 'Save & Connect'}
+                                    {loading ? 'Saving & Connecting...' : 'Save & Connect'}
                                 </Button>
                             </CardFooter>
                         </form>
