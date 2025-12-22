@@ -295,18 +295,24 @@ const AIChatPage: React.FC = () => {
 
         setMode('dashboard');
     } catch (err: any) {
-        console.error('Config save failed', err);
+        console.error('Config save failed:', err);
 
-        if (err.code === '42P01') {
-        addLog('CRITICAL ERROR: The table "user_settings" does not exist.');
-        addLog(
-            'ACTION REQUIRED: Run the SQL migration from the Status tab in Supabase.'
-        );
-        setLoading(false);
-        return;
+        const errorMessage =
+            err?.message ||
+            err?.error_description ||
+            err?.details ||
+            (typeof err === 'string' ? err : 'Unknown error');
+
+        if (err?.code === '42P01') {
+            addLog('CRITICAL ERROR: The table "user_settings" does not exist.');
+            addLog(
+            'ACTION REQUIRED: Please run the SQL migration in Supabase.'
+            );
+            setLoading(false);
+            return;
         }
 
-        addLog(`Warning: Saved locally. Cloud sync failed (${err.message}).`);
+        addLog(`Warning: Saved locally. Cloud sync failed (${errorMessage}).`);
         setMode('dashboard');
     } finally {
         setLoading(false);
