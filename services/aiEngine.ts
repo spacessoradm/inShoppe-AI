@@ -13,7 +13,7 @@ const getOpenAIClient = () => {
 
   return new OpenAI({
     apiKey: apiKey.trim(),
-    dangerouslyAllowBrowser: false, // backend only
+    dangerouslyAllowBrowser: true, // backend only
   });
 };
 
