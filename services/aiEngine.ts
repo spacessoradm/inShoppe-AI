@@ -14,7 +14,7 @@ const getOpenAIClient = () => {
     if (!apiKey) {
         // @ts-ignore
         //apiKey = import.meta.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-        apiKey = env?.VITE_OPENAI_API_KEY;
+        apiKey = process.env.VITE_OPENAI_API_KEY;
     }
 
     // 3. Fallback to generic API_KEY ONLY if it looks like an OpenAI key (starts with sk-)
