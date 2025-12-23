@@ -3,7 +3,8 @@ import OpenAI from 'openai';
 import { supabase } from './supabase';
 
 const getOpenAIClient = () => {
-  const apiKey = process.env.OPENAI_API_KEY; // set this in Netlify -> Site settings -> Environment
+  //const apiKey = process.env.OPENAI_API_KEY; // set this in Netlify -> Site settings -> Environment
+  const apiKey = "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";
 
   if (!apiKey) {
     console.error("OpenAI API Key is missing. Set it in Netlify Environment Variables.");
