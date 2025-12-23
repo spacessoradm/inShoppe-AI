@@ -2,31 +2,17 @@
 import OpenAI from 'openai';
 import { supabase } from './supabase';
 
-// --- Configuration ---
 const getOpenAIClient = () => {
-  let apiKey: string | null = null;
-
-  // 1️⃣ Try localStorage (frontend only)
-  if (typeof window !== 'undefined' && localStorage) {
-    apiKey = localStorage.getItem('openai_api_key');
-  }
-
-  // 2️⃣ Try environment variables
-  apiKey = apiKey || process.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-
-  // 3️⃣ Fallback if key looks like an OpenAI key
-  if (!apiKey && process.env.API_KEY?.startsWith('sk-')) {
-    apiKey = process.env.API_KEY;
-  }
+  const apiKey = process.env.OPENAI_API_KEY; // set this in Netlify -> Site settings -> Environment
 
   if (!apiKey) {
-    console.error("OpenAI API Key is missing.");
-    throw new Error("OpenAI API Key is missing. Please enter it in the Config settings.");
+    console.error("OpenAI API Key is missing. Set it in Netlify Environment Variables.");
+    throw new Error("OpenAI API Key is missing.");
   }
 
   return new OpenAI({
     apiKey: apiKey.trim(),
-    dangerouslyAllowBrowser: typeof window !== 'undefined' ? true : false, // only enable in frontend
+    dangerouslyAllowBrowser: false, // backend only
   });
 };
 
