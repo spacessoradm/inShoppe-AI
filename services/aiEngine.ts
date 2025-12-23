@@ -3,18 +3,31 @@ import OpenAI from 'openai';
 import { supabase } from './supabase';
 
 const getOpenAIClient = () => {
-  //const apiKey = process.env.OPENAI_API_KEY; // set this in Netlify -> Site settings -> Environment
-  const apiKey = "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";
+    // 1. Try Local Storage (User Input in UI) - Priority #1
+    //let apiKey = typeof localStorage !== 'undefined' ? localStorage.getItem('openai_api_key') : null;
+    let apiKey = "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";
 
-  if (!apiKey) {
-    console.error("OpenAI API Key is missing. Set it in Netlify Environment Variables.");
-    throw new Error("OpenAI API Key is missing.");
-  }
+    // 2. Try Specific Environment Variable (Vite) - Priority #2
+    if (!apiKey) {
+        // @ts-ignore
+        apiKey = import.meta.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    }
 
-  return new OpenAI({
-    apiKey: apiKey.trim(),
-    dangerouslyAllowBrowser: true, // backend only
-  });
+    // 3. Fallback to generic API_KEY ONLY if it looks like an OpenAI key (starts with sk-)
+    if (!apiKey && process.env.API_KEY && process.env.API_KEY.startsWith('sk-')) {
+        apiKey = process.env.API_KEY;
+    }
+
+    if (!apiKey) {
+        console.error("OpenAI API Key is missing.");
+        throw new Error("OpenAI API Key is missing. Please enter it in the Config settings.");
+    }
+
+    // CRITICAL: Trim whitespace to prevent 401 errors from copy-paste
+    return new OpenAI({ 
+        apiKey: apiKey.trim(), 
+        dangerouslyAllowBrowser: true 
+    });
 };
 
 
