@@ -4,35 +4,32 @@ import { supabase } from './supabase';
 
 // --- Configuration ---
 const getOpenAIClient = () => {
+  let apiKey: string | null = null;
 
-    const env = (import.meta as any).env;
-    // 1. Try Local Storage (User Input in UI) - Priority #1
-    let apiKey = typeof localStorage !== 'undefined' ? localStorage.getItem('openai_api_key') : null;
-    
+  // 1️⃣ Try localStorage (frontend only)
+  if (typeof window !== 'undefined' && localStorage) {
+    apiKey = localStorage.getItem('openai_api_key');
+  }
 
-    // 2. Try Specific Environment Variable (Vite) - Priority #2
-    if (!apiKey) {
-        // @ts-ignore
-        //apiKey = import.meta.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-        apiKey = process.env.VITE_OPENAI_API_KEY;
-    }
+  // 2️⃣ Try environment variables
+  apiKey = apiKey || process.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 
-    // 3. Fallback to generic API_KEY ONLY if it looks like an OpenAI key (starts with sk-)
-    if (!apiKey && process.env.API_KEY && process.env.API_KEY.startsWith('sk-')) {
-        apiKey = process.env.API_KEY;
-    }
+  // 3️⃣ Fallback if key looks like an OpenAI key
+  if (!apiKey && process.env.API_KEY?.startsWith('sk-')) {
+    apiKey = process.env.API_KEY;
+  }
 
-    if (!apiKey) {
-        console.error("OpenAI API Key is missing.");
-        throw new Error("OpenAI API Key is missing. Please enter it in the Config settings.");
-    }
+  if (!apiKey) {
+    console.error("OpenAI API Key is missing.");
+    throw new Error("OpenAI API Key is missing. Please enter it in the Config settings.");
+  }
 
-    // CRITICAL: Trim whitespace to prevent 401 errors from copy-paste
-    return new OpenAI({ 
-        apiKey: apiKey.trim(), 
-        dangerouslyAllowBrowser: true 
-    });
+  return new OpenAI({
+    apiKey: apiKey.trim(),
+    dangerouslyAllowBrowser: typeof window !== 'undefined' ? true : false, // only enable in frontend
+  });
 };
+
 
 // --- Real Estate Specific Intents ---
 export type RealEstateIntent = 
