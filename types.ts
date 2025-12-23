@@ -44,3 +44,16 @@ export interface UserProfile {
   role: 'owner' | 'member' | 'admin';
   twilio_phone_number?: string; // Persisted Twilio Number
 }
+
+export interface Lead {
+  id: number;
+  user_id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  status: 'New' | 'Qualified' | 'Proposal' | 'Won' | 'Lost';
+  deal_value?: number;
+  tags?: string[];
+  created_at: string;
+  last_contacted_at?: string;
+}

@@ -53,7 +53,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   setSession(data.session);
                   setUser(data.session?.user ?? null);
                   if (data.session?.user) {
-                      await loadProfileAndOrg(data.session.user.id);
+                      await loadProfileAndOrg(data.session.user.id, data.session.user.email);
                   }
               }
           }
@@ -106,7 +106,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUser(session?.user ?? null);
             
             if (session?.user) {
-                await loadProfileAndOrg(session.user.id);
+                await loadProfileAndOrg(session.user.id, session.user.email);
             } else {
                 setProfile(null);
                 setOrganization(null);
@@ -127,7 +127,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // --- Profile & Org Management ---
 
-  const loadProfileAndOrg = async (userId: string) => {
+  const loadProfileAndOrg = async (userId: string, userEmail?: string) => {
     if (!supabase) return;
 
     try {
@@ -141,13 +141,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               .from('profiles')
               .select('*')
               .eq('id', userId)
-              .single();
+              .maybeSingle(); // Use maybeSingle to avoid 406 errors
           
           if (data) {
               profileData = data;
           } else {
               retries++;
               await new Promise(r => setTimeout(r, 500)); // Wait 500ms before retry
+          }
+      }
+
+      // --- SELF REPAIR LOGIC ---
+      // If profile is missing (e.g. user signed up before SQL script was run), create it now.
+      if (!profileData && userEmail) {
+          console.warn("Profile missing. Attempting self-repair...");
+          try {
+              // 1. Create Org
+              const { data: newOrg, error: orgError } = await supabase
+                  .from('organizations')
+                  .insert({ name: 'My Workspace', plan: 'Free', credits: 30 })
+                  .select()
+                  .single();
+
+              if (newOrg && !orgError) {
+                  // 2. Create Profile
+                  const { data: newProfile, error: profileError } = await supabase
+                      .from('profiles')
+                      .insert({ 
+                          id: userId, 
+                          email: userEmail, 
+                          organization_id: newOrg.id,
+                          role: 'owner',
+                          full_name: userEmail.split('@')[0]
+                      })
+                      .select()
+                      .single();
+                  
+                  if (newProfile && !profileError) {
+                      console.log("Self-repair successful. Profile created.");
+                      profileData = newProfile;
+                      // Also init user_settings
+                      await supabase.from('user_settings').insert({ user_id: userId });
+                  }
+              }
+          } catch (repairError) {
+              console.error("Self-repair failed:", repairError);
           }
       }
 
@@ -159,13 +197,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               .from('organizations')
               .select('*')
               .eq('id', profileData.organization_id)
-              .single();
+              .maybeSingle();
           
           if (orgData) {
               setOrganization(orgData);
           }
       } else {
-          console.warn("Profile not found even after retries. The Trigger might have failed or RLS blocked it.");
+          console.warn("Profile could not be loaded or created. Please check database tables.");
       }
     } catch (e) {
       console.error("Error loading profile/org:", e);

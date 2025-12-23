@@ -1,19 +1,14 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { cn } from '../lib/utils';
-import { Link } from 'react-router-dom';
-
-// Mock data for CRM
-const initialLeads = [
-  { id: 1, name: 'John Doe', phone: '+1-202-555-0104', email: 'john@example.com', status: 'Qualified', tags: ['VIP', 'Interested'], value: 'RM 299', lastContact: '2h ago' },
-  { id: 2, name: 'Jane Smith', phone: '+1-202-555-0176', email: 'jane@tech.com', status: 'New', tags: ['Pricing'], value: 'RM 199', lastContact: '1d ago' },
-  { id: 3, name: 'Sam Wilson', phone: '+1-202-555-0182', email: 'sam@agency.com', status: 'Won', tags: ['Enterprise'], value: 'RM 1,500', lastContact: '3d ago' },
-  { id: 4, name: 'Alice Brown', phone: '+1-202-555-0199', email: 'alice@cafe.com', status: 'Proposal', tags: ['Cafe'], value: 'RM 899', lastContact: '5h ago' },
-  { id: 5, name: 'Michael Lee', phone: '+1-202-555-0111', email: 'mike@dev.com', status: 'Lost', tags: ['Budget'], value: 'RM 0', lastContact: '1w ago' },
-];
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/Dialog';
+import { supabase } from '../services/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import { Lead } from '../types';
 
 const statusColors: Record<string, string> = {
     'New': 'bg-blue-500/10 text-blue-400 border-blue-500/20',
@@ -24,13 +19,132 @@ const statusColors: Record<string, string> = {
 };
 
 const CRMPage: React.FC = () => {
+    const { user } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
-    const [leads, setLeads] = useState(initialLeads);
+    const [leads, setLeads] = useState<Lead[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+    
+    // New Lead Form State
+    const [newLeadName, setNewLeadName] = useState('');
+    const [newLeadEmail, setNewLeadEmail] = useState('');
+    const [newLeadPhone, setNewLeadPhone] = useState('');
+    const [newLeadValue, setNewLeadValue] = useState('');
+    const [newLeadStatus, setNewLeadStatus] = useState('New');
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        if (user) {
+            fetchLeads();
+            
+            // Subscribe to Realtime Leads Updates
+            if (supabase) {
+                const channel = supabase
+                    .channel('leads-updates')
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: '*', // Listen for INSERT, UPDATE, DELETE
+                            schema: 'public',
+                            table: 'leads',
+                            filter: `user_id=eq.${user.id}`
+                        },
+                        (payload) => {
+                            if (payload.eventType === 'INSERT') {
+                                setLeads(prev => {
+                                    const newLead = payload.new as Lead;
+                                    // Prevent duplicates if Realtime fires after Fetch
+                                    if (prev.some(l => l.id === newLead.id)) return prev;
+                                    return [newLead, ...prev];
+                                });
+                            } else if (payload.eventType === 'UPDATE') {
+                                setLeads(prev => prev.map(lead => lead.id === payload.new.id ? payload.new as Lead : lead));
+                            } else if (payload.eventType === 'DELETE') {
+                                setLeads(prev => prev.filter(lead => lead.id !== payload.old.id));
+                            }
+                        }
+                    )
+                    .subscribe((status) => {
+                        console.log("CRM Realtime Status:", status);
+                    });
+
+                return () => {
+                    supabase.removeChannel(channel);
+                };
+            }
+        }
+    }, [user]);
+
+    const fetchLeads = async () => {
+        if (!supabase || !user) {
+            setLoading(false);
+            return;
+        }
+        setLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from('leads')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                // If table doesn't exist yet, we might get an error.
+                if (error.code === '42P01') {
+                    console.warn("Leads table does not exist. Please run the SQL script.");
+                } else {
+                    console.error("Error fetching leads:", error);
+                }
+            } else {
+                setLeads(data || []);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleAddLead = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!supabase || !user) return;
+        
+        setSaving(true);
+        try {
+            const { data, error } = await supabase.from('leads').insert({
+                user_id: user.id,
+                name: newLeadName,
+                email: newLeadEmail,
+                phone: newLeadPhone,
+                status: newLeadStatus,
+                deal_value: parseFloat(newLeadValue) || 0,
+                tags: ['Manual Entry'],
+                created_at: new Date().toISOString()
+            }).select().single();
+
+            if (error) throw error;
+            
+            setIsAddModalOpen(false);
+            // Reset form
+            setNewLeadName('');
+            setNewLeadEmail('');
+            setNewLeadPhone('');
+            setNewLeadValue('');
+            
+            // Explicitly refresh to be sure
+            fetchLeads();
+        } catch (error: any) {
+            console.error("Error adding lead:", error.message);
+            alert("Failed to add lead. Make sure you have run the latest SQL script.");
+        } finally {
+            setSaving(false);
+        }
+    };
 
     const filteredLeads = leads.filter(lead => 
         lead.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        lead.phone.includes(searchTerm) ||
-        lead.email.toLowerCase().includes(searchTerm.toLowerCase())
+        (lead.phone && lead.phone.includes(searchTerm)) ||
+        (lead.email && lead.email?.toLowerCase().includes(searchTerm.toLowerCase()))
     );
 
     return (
@@ -42,9 +156,22 @@ const CRMPage: React.FC = () => {
                         <h1 className="text-3xl font-bold tracking-tight text-white">CRM & Leads</h1>
                         <p className="text-slate-400">Manage your customer relationships and track deal flow.</p>
                     </div>
-                    <Button className="bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20">
-                        + Add New Lead
-                    </Button>
+                    <div className="flex gap-2">
+                        <Button 
+                            onClick={fetchLeads} 
+                            variant="outline" 
+                            className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                            title="Refresh Leads"
+                        >
+                            <RefreshIcon className={cn("h-4 w-4", loading && "animate-spin")} />
+                        </Button>
+                        <Button 
+                            onClick={() => setIsAddModalOpen(true)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20"
+                        >
+                            + Add New Lead
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Filters & Actions */}
@@ -75,67 +202,162 @@ const CRMPage: React.FC = () => {
                                         <th className="px-6 py-4">Status</th>
                                         <th className="px-6 py-4">Deal Value</th>
                                         <th className="px-6 py-4">Tags</th>
-                                        <th className="px-6 py-4">Last Contact</th>
+                                        <th className="px-6 py-4">Created At</th>
                                         <th className="px-6 py-4 text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-800/50">
-                                    {filteredLeads.map((lead) => (
-                                        <tr key={lead.id} className="hover:bg-slate-800/30 transition-colors group">
-                                            <td className="px-6 py-4">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-inner">
-                                                        {lead.name.charAt(0)}
-                                                    </div>
-                                                    <div>
-                                                        <div className="font-semibold text-white">{lead.name}</div>
-                                                        <div className="text-xs text-slate-400">{lead.phone}</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <Badge className={cn("border font-medium shadow-none pointer-events-none", statusColors[lead.status] || 'bg-slate-800 text-slate-300')}>
-                                                    {lead.status}
-                                                </Badge>
-                                            </td>
-                                            <td className="px-6 py-4 font-medium text-slate-200">
-                                                {lead.value}
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <div className="flex flex-wrap gap-1">
-                                                    {lead.tags.map(tag => (
-                                                        <span key={tag} className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 border border-slate-700">
-                                                            {tag}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 text-slate-400">
-                                                {lead.lastContact}
-                                            </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-full hover:bg-slate-700 hover:text-blue-400">
-                                                        <PhoneIcon className="h-4 w-4" />
-                                                    </Button>
-                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-full hover:bg-slate-700 hover:text-emerald-400" onClick={() => window.location.hash = `#/console/chat/${lead.id}`}>
-                                                        <MessageCircleIcon className="h-4 w-4" />
-                                                    </Button>
+                                    {loading && leads.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                                                <div className="flex justify-center items-center gap-2">
+                                                    <div className="h-4 w-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
+                                                    Loading leads...
                                                 </div>
                                             </td>
                                         </tr>
-                                    ))}
+                                    ) : filteredLeads.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                                                {searchTerm ? `No leads found matching "${searchTerm}"` : "No leads yet. New incoming messages will appear here automatically."}
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredLeads.map((lead) => (
+                                            <tr key={lead.id} className="hover:bg-slate-800/30 transition-colors group animate-fadeInUp">
+                                                <td className="px-6 py-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-inner shrink-0">
+                                                            {lead.name.charAt(0).toUpperCase()}
+                                                        </div>
+                                                        <div>
+                                                            <div className="font-semibold text-white">{lead.name}</div>
+                                                            <div className="text-xs text-slate-400 flex flex-col sm:flex-row gap-1">
+                                                                <span>{lead.phone || 'No Phone'}</span>
+                                                                {lead.email && (
+                                                                    <>
+                                                                        <span className="hidden sm:inline">•</span>
+                                                                        <span>{lead.email}</span>
+                                                                    </>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <Badge className={cn("border font-medium shadow-none pointer-events-none", statusColors[lead.status] || 'bg-slate-800 text-slate-300')}>
+                                                        {lead.status}
+                                                    </Badge>
+                                                </td>
+                                                <td className="px-6 py-4 font-medium text-slate-200">
+                                                    {lead.deal_value ? `RM ${lead.deal_value.toLocaleString()}` : '-'}
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {lead.tags && lead.tags.length > 0 ? lead.tags.map(tag => (
+                                                            <span key={tag} className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 border border-slate-700">
+                                                                {tag}
+                                                            </span>
+                                                        )) : <span className="text-slate-600 text-xs">-</span>}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 text-slate-400 text-xs">
+                                                    {new Date(lead.created_at).toLocaleDateString()}
+                                                </td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-full hover:bg-slate-700 hover:text-blue-400">
+                                                            <PhoneIcon className="h-4 w-4" />
+                                                        </Button>
+                                                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-full hover:bg-slate-700 hover:text-emerald-400">
+                                                            <MessageCircleIcon className="h-4 w-4" />
+                                                        </Button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
                                 </tbody>
                             </table>
-                            {filteredLeads.length === 0 && (
-                                <div className="p-12 text-center text-slate-500">
-                                    No leads found matching "{searchTerm}"
-                                </div>
-                            )}
                         </div>
                     </CardContent>
                 </Card>
              </div>
+
+             {/* Add Lead Modal */}
+             <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
+                <DialogContent className="bg-slate-900 border-slate-800 text-white sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle>Add New Lead</DialogTitle>
+                        <DialogDescription className="text-slate-400">
+                            Create a new customer profile manually.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleAddLead} className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <label htmlFor="name" className="text-right text-sm font-medium text-slate-300">Name</label>
+                            <Input 
+                                id="name" 
+                                value={newLeadName} 
+                                onChange={e => setNewLeadName(e.target.value)} 
+                                className="col-span-3 bg-slate-950 border-slate-700" 
+                                required 
+                            />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <label htmlFor="phone" className="text-right text-sm font-medium text-slate-300">Phone</label>
+                            <Input 
+                                id="phone" 
+                                value={newLeadPhone} 
+                                onChange={e => setNewLeadPhone(e.target.value)} 
+                                className="col-span-3 bg-slate-950 border-slate-700" 
+                                placeholder="+1234567890" 
+                            />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <label htmlFor="email" className="text-right text-sm font-medium text-slate-300">Email</label>
+                            <Input 
+                                id="email" 
+                                type="email"
+                                value={newLeadEmail} 
+                                onChange={e => setNewLeadEmail(e.target.value)} 
+                                className="col-span-3 bg-slate-950 border-slate-700" 
+                            />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <label htmlFor="value" className="text-right text-sm font-medium text-slate-300">Value (RM)</label>
+                            <Input 
+                                id="value" 
+                                type="number"
+                                value={newLeadValue} 
+                                onChange={e => setNewLeadValue(e.target.value)} 
+                                className="col-span-3 bg-slate-950 border-slate-700" 
+                                placeholder="0.00"
+                            />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <label htmlFor="status" className="text-right text-sm font-medium text-slate-300">Status</label>
+                            <select 
+                                id="status"
+                                value={newLeadStatus}
+                                onChange={e => setNewLeadStatus(e.target.value)}
+                                className="col-span-3 flex h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            >
+                                <option value="New">New</option>
+                                <option value="Qualified">Qualified</option>
+                                <option value="Proposal">Proposal</option>
+                                <option value="Won">Won</option>
+                                <option value="Lost">Lost</option>
+                            </select>
+                        </div>
+                        <div className="flex justify-end pt-4">
+                            <Button type="submit" className="bg-blue-600 hover:bg-blue-500" disabled={saving}>
+                                {saving ? 'Saving...' : 'Create Lead'}
+                            </Button>
+                        </div>
+                    </form>
+                </DialogContent>
+             </Dialog>
         </div>
     );
 };
@@ -147,6 +369,17 @@ function SearchIcon(props: React.SVGProps<SVGSVGElement>) {
       <path d="m21 21-4.3-4.3" />
     </svg>
   )
+}
+
+function RefreshIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+            <path d="M16 21h5v-5" />
+        </svg>
+    )
 }
 
 function PhoneIcon(props: React.SVGProps<SVGSVGElement>) {
