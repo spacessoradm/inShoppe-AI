@@ -395,18 +395,24 @@ const AIChatPage: React.FC = () => {
             
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
-            const { intent } = await processIncomingMessage(
+            // Timeout safety for classify
+            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 10000));
+            const processPromise = processIncomingMessage(
                 text, 
                 user.id,
                 systemInstructionRef.current,
                 activeKey
             );
             
+            const result: any = await Promise.race([processPromise, timeoutPromise]);
+            const { intent } = result;
+            
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
             if (verbose) setAiStatus('');
         } catch (e) {
             console.error("Classification error", e);
             if (verbose) setAiStatus('Error');
+            await supabase.from('messages').update({ intent_tag: 'Manual Review' }).eq('id', msgId);
         }
     };
 
@@ -421,18 +427,30 @@ const AIChatPage: React.FC = () => {
         try {
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
-            const { intent, reply, contextUsed } = await processIncomingMessage(
+            // Race against a timeout to ensure we don't hang indefinitely
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Processing timed out (15s)")), 15000)
+            );
+
+            const processPromise = processIncomingMessage(
                 text,
                 user.id,
                 systemInstructionRef.current,
                 activeKey
             );
 
+            // Wait for result or timeout
+            const result: any = await Promise.race([processPromise, timeoutPromise]);
+            const { intent, reply, contextUsed } = result;
+
+            // Update intent
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
 
             setAiStatus(contextUsed ? 'Searching Knowledge...' : 'Replying...');
+            // Small delay for UX naturalness, but only if it was fast
             await new Promise(resolve => setTimeout(resolve, 500));
 
+            // Send Reply
             await supabase.from('messages').insert({
                 user_id: user.id,
                 text: reply,
@@ -452,6 +470,23 @@ const AIChatPage: React.FC = () => {
             console.error("AI Processing Failed:", error);
             addLog(`Error: AI Failed - ${error.message}`);
             setAiStatus('Error');
+            
+            // CRITICAL FIX: Send a fallback message so the user gets *something* even if AI crashes
+            const fallbackReply = "I apologize, but I am experiencing high traffic. A human agent will be with you shortly.";
+            
+            await supabase.from('messages').insert({
+                user_id: user.id,
+                text: fallbackReply,
+                sender: 'bot',
+                direction: 'outbound',
+                phone: phone
+            });
+            
+            await supabase.from('messages').update({ intent_tag: 'System Error' }).eq('id', msgId);
+            
+            if (webhookUrl) {
+                await sendToTwilio(phone, fallbackReply);
+            }
         }
     };
 

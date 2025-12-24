@@ -250,8 +250,13 @@ export const processIncomingMessage = async (
 ) => {
     console.log("[AI Engine] Starting processing pipeline...");
     
-    const intent = await classifyIntent(userMessage, apiKey);
-    const context = await retrieveContext(userId, userMessage, apiKey);
+    // Step 1: Run Classification and Context Retrieval in PARALLEL to save time
+    const [intent, context] = await Promise.all([
+        classifyIntent(userMessage, apiKey),
+        retrieveContext(userId, userMessage, apiKey)
+    ]);
+
+    // Step 2: Generate Response using results from Step 1
     const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction, apiKey);
 
     return {
