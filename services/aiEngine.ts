@@ -15,19 +15,28 @@ export type RealEstateIntent =
 // --- Helper: Call AI Proxy ---
 // This prevents CORS errors by routing requests through Supabase Edge Functions
 const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: string) => {
-    if (!supabase) throw new Error("Supabase client not initialized");
+    // DEBUG LOG: This proves the new code is running
+    console.log(`[AI Engine] 🚀 Invoking Edge Function 'openai-proxy' for action: '${action}'`);
 
+    if (!supabase) {
+        console.error("[AI Engine] ❌ Supabase client is not initialized in aiEngine.ts");
+        throw new Error("Supabase client not initialized");
+    }
+
+    // Call the Edge Function (This url will be https://<project>.supabase.co/functions/v1/openai-proxy)
     const { data, error } = await supabase.functions.invoke('openai-proxy', {
         body: { action, apiKey, ...payload }
     });
 
     if (error) {
-        console.error(`AI Proxy Error (${action}):`, error);
+        console.error(`[AI Engine] ❌ Edge Function Failed:`, error);
         if (error.message?.includes('FunctionsFetchError') || error.message?.includes('Failed to fetch')) {
-             throw new Error("Connection failed. Please deploy the 'openai-proxy' Edge Function.");
+             throw new Error("Connection to Supabase Edge Function failed. Is the function deployed?");
         }
         throw new Error(error.message || "AI Request Failed");
     }
+
+    console.log(`[AI Engine] ✅ Edge Function Success`, data);
     return data;
 };
 
@@ -195,6 +204,8 @@ export const processIncomingMessage = async (
     systemInstruction: string,
     apiKey?: string
 ) => {
+    console.log("[AI Engine] Starting processing pipeline...");
+    
     // Step 1: Tagging
     const intent = await classifyIntent(userMessage, apiKey);
 
