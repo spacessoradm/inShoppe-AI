@@ -13,30 +13,40 @@ export type RealEstateIntent =
     | 'Unknown';
 
 // --- Helper: Call AI Proxy ---
-// This prevents CORS errors by routing requests through Supabase Edge Functions
 const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: string) => {
-    // DEBUG LOG: This proves the new code is running
     console.log(`[AI Engine] 🚀 Invoking Edge Function 'openai-proxy' for action: '${action}'`);
 
     if (!supabase) {
-        console.error("[AI Engine] ❌ Supabase client is not initialized in aiEngine.ts");
+        console.error("[AI Engine] ❌ Supabase client is not initialized.");
         throw new Error("Supabase client not initialized");
     }
 
-    // Call the Edge Function (This url will be https://<project>.supabase.co/functions/v1/openai-proxy)
+    // Call the Edge Function
     const { data, error } = await supabase.functions.invoke('openai-proxy', {
         body: { action, apiKey, ...payload }
     });
 
+    // 1. Handle Transport/Network Errors (e.g. 404 Not Found, 500 Server Error)
     if (error) {
-        console.error(`[AI Engine] ❌ Edge Function Failed:`, error);
-        if (error.message?.includes('FunctionsFetchError') || error.message?.includes('Failed to fetch')) {
-             throw new Error("Connection to Supabase Edge Function failed. Is the function deployed?");
+        console.error(`[AI Engine] ❌ Edge Function Transport Error:`, error);
+        
+        // Check for specific "Function not found" (404) which appears as non-2xx
+        const msg = error.message || '';
+        if (msg.includes('non-2xx') || msg.includes('not found')) {
+             throw new Error("CRITICAL: 'openai-proxy' function not found. Did you deploy it? Run: 'supabase functions deploy openai-proxy'");
         }
-        throw new Error(error.message || "AI Request Failed");
+        
+        throw new Error(`Edge Function Error: ${msg}`);
     }
 
-    console.log(`[AI Engine] ✅ Edge Function Success`, data);
+    // 2. Handle Logic Errors returned by the function (e.g. Missing API Key)
+    // We updated the proxy to return { error: "message" } with 200 OK to allow reading the message.
+    if (data && data.error) {
+        console.error(`[AI Engine] ⚠️ Function Logic Error:`, data.error);
+        throw new Error(`AI Error: ${data.error}`);
+    }
+
+    console.log(`[AI Engine] ✅ Success`, data);
     return data;
 };
 
@@ -71,6 +81,11 @@ export const classifyIntent = async (message: string, apiKey?: string): Promise<
             temperature: 0.0,
         }, apiKey);
 
+        // Safety check for response structure
+        if (!response.choices || !response.choices[0]) {
+             throw new Error("Invalid response format from AI");
+        }
+
         let tag = response.choices[0]?.message?.content?.replace(/['"]/g, '').replace('Category:', '').trim();
         
         const validTags = [
@@ -94,7 +109,6 @@ export const retrieveContext = async (userId: string, message: string, apiKey?: 
     try {
         if (!supabase) return "";
 
-        // 1. Resolve Organization ID
         const { data: profile } = await supabase
             .from('profiles')
             .select('organization_id')
@@ -102,22 +116,21 @@ export const retrieveContext = async (userId: string, message: string, apiKey?: 
             .single();
 
         if (!profile?.organization_id) {
-            console.warn("RAG: No organization found for user", userId);
             return "";
         }
 
-        // 2. Create Embedding via Proxy
         const embeddingResult = await invokeAI('embedding', {
             model: "text-embedding-3-small",
             input: message,
             dimensions: 768
         }, apiKey);
+        
+        if (!embeddingResult.data || !embeddingResult.data[0]) {
+            return "";
+        }
 
         const queryEmbedding = embeddingResult.data[0].embedding;
 
-        if (!queryEmbedding) return "";
-
-        // 3. Search Database (RPC)
         const { data: searchResults, error } = await supabase.rpc('match_knowledge', {
             query_embedding: queryEmbedding,
             match_threshold: 0.5,
@@ -140,7 +153,7 @@ export const retrieveContext = async (userId: string, message: string, apiKey?: 
     }
 };
 
-// --- 3. RESPONSE GENERATION (REAL ESTATE PERSONA) ---
+// --- 3. RESPONSE GENERATION ---
 export const generateRealEstateResponse = async (
     userMessage: string, 
     intent: RealEstateIntent, 
@@ -174,7 +187,6 @@ export const generateRealEstateResponse = async (
             
             Use the following retrieved knowledge to answer the user's question accurately.
             If the answer is NOT in the knowledge base, politely admit it and ask to connect them to a human agent.
-            DO NOT invent facts about the property.
             
             KNOWLEDGE BASE:
             ${context || "No specific documents found."}
@@ -189,11 +201,12 @@ export const generateRealEstateResponse = async (
             temperature: 0.7,
         }, apiKey);
 
-        return response.choices[0]?.message?.content || "I am having trouble processing that request. Let me connect you to a human agent.";
+        return response.choices[0]?.message?.content || "I am having trouble processing that request.";
 
     } catch (error: any) {
         console.error("Response generation failed:", error);
-        return `System Error: ${error.message || "Unable to generate response."}`;
+        // Return the actual error message so the user sees it in the chat bubble
+        return `System Error: ${error.message}`;
     }
 };
 
@@ -206,13 +219,8 @@ export const processIncomingMessage = async (
 ) => {
     console.log("[AI Engine] Starting processing pipeline...");
     
-    // Step 1: Tagging
     const intent = await classifyIntent(userMessage, apiKey);
-
-    // Step 2: Context
     const context = await retrieveContext(userId, userMessage, apiKey);
-
-    // Step 3: Reply
     const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction, apiKey);
 
     return {

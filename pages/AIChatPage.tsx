@@ -18,11 +18,11 @@ interface SimMessage {
   text: string;
   sender: 'user' | 'bot' | 'system';
   direction?: 'inbound' | 'outbound';
-  timestamp: string; // Display time
-  fullTimestamp: number; // Sorting
-  phone?: string; // Grouping
+  timestamp: string; 
+  fullTimestamp: number;
+  phone?: string;
   status?: 'sent' | 'delivered' | 'read';
-  intent_tag?: string; // Added Intent Tag support
+  intent_tag?: string;
 }
 
 interface KnowledgeItem {
@@ -33,11 +33,9 @@ interface KnowledgeItem {
 
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
-// Helper to safely get env vars without crashing
 const getEnv = (key: string) => {
     let val = '';
     try {
-        // Try Vite import.meta.env
         if ((import.meta as any).env && (import.meta as any).env[key]) {
             val = (import.meta as any).env[key];
         }
@@ -45,7 +43,6 @@ const getEnv = (key: string) => {
 
     if (!val) {
         try {
-            // Try Node process.env (if polyfilled)
             if (typeof process !== 'undefined' && process.env && process.env[key]) {
                 val = process.env[key] as string;
             }
@@ -112,7 +109,7 @@ serve(async (req) => {
 })
 `;
 
-// --- OPENAI PROXY CODE SNIPPET (NEW) ---
+// --- OPENAI PROXY CODE SNIPPET (ROBUST VERSION) ---
 const OPENAI_PROXY_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import OpenAI from 'https://esm.sh/openai@4.28.0'
@@ -123,17 +120,28 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  // Handle CORS
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
 
   try {
     const { action, apiKey, ...payload } = await req.json()
-    // PRIORITY: 1. API Key sent from frontend (Dev mode) 2. Secret stored in Supabase (Production)
+    
+    // 1. Resolve API Key
     const finalApiKey = apiKey || Deno.env.get('OPENAI_API_KEY')
     
-    if (!finalApiKey) throw new Error('Missing OpenAI API Key')
+    if (!finalApiKey) {
+      // Return 200 with error field so frontend can read the message instead of getting a generic 500
+      return new Response(JSON.stringify({ error: 'Missing OPENAI_API_KEY. Set it in Supabase Secrets.' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200, 
+      })
+    }
 
     const openai = new OpenAI({ apiKey: finalApiKey })
 
+    // 2. Route Action
     if (action === 'chat') {
       const completion = await openai.chat.completions.create(payload)
       return new Response(JSON.stringify(completion), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
@@ -144,12 +152,13 @@ serve(async (req) => {
       return new Response(JSON.stringify(embedding), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
-    throw new Error('Invalid action')
+    throw new Error('Invalid action: ' + action)
 
   } catch (error) {
+    // Return error as JSON so frontend can display it
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 400,
+      status: 200, // Return 200 to bypass generic Supabase error handlers
     })
   }
 })
@@ -383,8 +392,6 @@ const AIChatPage: React.FC = () => {
         try {
             setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
             
-            // Priority: Manual Input > Frontend Env > Backend Env (Handled by Proxy)
-            // If activeKey is empty, the Proxy handles finding it in Supabase Secrets
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
             const { intent } = await processIncomingMessage(
@@ -639,8 +646,6 @@ const AIChatPage: React.FC = () => {
         try {
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
-            // Use the Proxy for embedding to avoid CORS and stick to OpenAI as requested
-            // Note: If activeKey is empty, the Proxy will look for OPENAI_API_KEY in Supabase Secrets
             const { data, error: proxyError } = await supabase.functions.invoke('openai-proxy', {
                 body: { 
                     action: 'embedding', 
@@ -651,6 +656,7 @@ const AIChatPage: React.FC = () => {
             });
 
             if (proxyError) throw new Error(proxyError.message || "Proxy Error");
+            if (data.error) throw new Error(data.error);
             
             const embedding = data.data[0].embedding;
             
