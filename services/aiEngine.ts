@@ -162,34 +162,66 @@ export const generateRealEstateResponse = async (
     apiKey?: string
 ): Promise<string> => {
     try {
+        // --- Intent-Aware Guidance Rules ---
         let specificGuidance = "";
         switch (intent) {
+            case 'Property Inquiry':
+                specificGuidance = "GOAL: Clarify requirements (budget, location, timeline). Narrow options. Offer a viewing proactively.";
+                break;
             case 'Price/Availability':
-                specificGuidance = "Be transparent but persuasive. If exact price isn't in context, give a range and ask to schedule a call.";
+                specificGuidance = "GOAL: Be transparent. If exact data is missing, give a reasonable range based on market knowledge. PUSH toward a booking or agent call.";
                 break;
             case 'Booking/Viewing':
-                specificGuidance = "Prioritize securing the appointment. Offer specific slots if data available, or ask for their availability immediately.";
+                specificGuidance = "GOAL: HIGH PRIORITY. Secure the appointment immediately. Offer specific time options if possible. Do not delay.";
+                break;
+            case 'Location/Amenities':
+                specificGuidance = "GOAL: Answer briefly, then link the benefit to lifestyle or investment value. Transition immediately to a viewing offer.";
                 break;
             case 'Complaint':
-                specificGuidance = "Be empathetic, apologize professionally, and assure them a human agent will take over.";
+                specificGuidance = "GOAL: Acknowledge emotionally. Apologize professionally. State clearly that a human agent will follow up. Do not argue.";
+                break;
+            case 'General Chat':
+                specificGuidance = "GOAL: Redirect the conversation gently toward property intent, qualification, or seeing a unit.";
                 break;
             default:
-                specificGuidance = "Keep it professional, helpful, and concise.";
+                specificGuidance = "GOAL: Qualify the lead and advance them to the next step.";
         }
 
+        // --- Engineered System Prompt ---
         const systemPrompt = `
             ${systemInstruction}
 
-            CONTEXT & RULES:
-            You are an expert Real Estate Agent AI.
-            User Intent: ${intent}
-            Specific Guidance: ${specificGuidance}
+            ────────────────────────────
+            CORE IDENTITY & OBJECTIVE
+            ────────────────────────────
+            You are NOT a generic chatbot. You are a Senior Real Estate Sales Agent.
+            Your primary objective is to QUALIFY leads, ADVANCE them to the next step, and SECURE VIEWINGS.
             
-            Use the following retrieved knowledge to answer the user's question accurately.
-            If the answer is NOT in the knowledge base, politely admit it and ask to connect them to a human agent.
-            
-            KNOWLEDGE BASE:
-            ${context || "No specific documents found."}
+            ────────────────────────────
+            CORE BEHAVIOR RULES
+            ────────────────────────────
+            1. PROGRESSION FIRST: Every response must aim to move the user closer to a booking, contact exchange, or sale.
+            2. GUIDE THE CHAT: Do not wait passively for information. If data is missing, propose the next best action.
+            3. PROFESSIONAL TONE: Be confident, helpful, and conversion-oriented. Never say "I am an AI".
+            4. KNOWLEDGE HANDLING: If the specific answer is not in the knowledge base, provide a reasonable market assumption or range, then immediately propose a next step (e.g., "I can check the exact figure, but shall we book a viewing to see the unit first?"). Do NOT hallucinate specific property specs.
+
+            ────────────────────────────
+            CURRENT INTENT: ${intent}
+            SPECIFIC GUIDANCE: ${specificGuidance}
+            ────────────────────────────
+
+            ────────────────────────────
+            RETRIEVED KNOWLEDGE BASE
+            ────────────────────────────
+            ${context || "No specific property documents found. Rely on general real estate best practices."}
+
+            ────────────────────────────
+            FINAL OUTPUT RULES
+            ────────────────────────────
+            - Keep it conversational and natural (WhatsApp style).
+            - Short paragraphs.
+            - ALWAYS include a clear Call-to-Action (question, booking offer, or next step).
+            - If you fail to move the lead forward, you have failed your objective.
         `;
 
         const response = await invokeAI('chat', {
@@ -198,14 +230,13 @@ export const generateRealEstateResponse = async (
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userMessage }
             ],
-            temperature: 0.7,
+            temperature: 0.6, // Slightly lower temperature for more focused sales behavior
         }, apiKey);
 
-        return response.choices[0]?.message?.content || "I am having trouble processing that request.";
+        return response.choices[0]?.message?.content || "I am having trouble processing that request. Let me connect you to a human agent.";
 
     } catch (error: any) {
         console.error("Response generation failed:", error);
-        // Return the actual error message so the user sees it in the chat bubble
         return `System Error: ${error.message}`;
     }
 };

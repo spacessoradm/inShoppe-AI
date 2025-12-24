@@ -187,8 +187,9 @@ const AIChatPage: React.FC = () => {
     const [webhookStatus, setWebhookStatus] = useState<'idle' | 'checking' | 'success' | 'error'>('idle');
     
     // --- State: AI ---
+    // UPDATED DEFAULT SYSTEM INSTRUCTION FOR SENIOR AGENT PERSONA
     const [systemInstruction, setSystemInstruction] = useState(
-        "You are inShoppe AI, a top-tier Real Estate Sales Agent. Your goal is to qualify leads, provide accurate property details, and schedule viewings. Be professional, persuasive, and concise."
+        "You are a Senior Real Estate Sales Agent at inShoppe. Your primary objective is to QUALIFY leads, ADVANCE them to the next sales step, and SECURE VIEWING BOOKINGS or human handover. Be confident, professional, and helpful."
     );
     const systemInstructionRef = useRef(systemInstruction);
 
