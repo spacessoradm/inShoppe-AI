@@ -127,6 +127,7 @@ serve(async (req) => {
 
   try {
     const { action, apiKey, ...payload } = await req.json()
+    // PRIORITY: 1. API Key sent from frontend (Dev mode) 2. Secret stored in Supabase (Production)
     const finalApiKey = apiKey || Deno.env.get('OPENAI_API_KEY')
     
     if (!finalApiKey) throw new Error('Missing OpenAI API Key')
@@ -382,7 +383,10 @@ const AIChatPage: React.FC = () => {
         try {
             setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
             
-            const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
+            // Priority: Manual Input > Frontend Env > Backend Env (Handled by Proxy)
+            // If activeKey is empty, the Proxy handles finding it in Supabase Secrets
+            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
+            
             const { intent } = await processIncomingMessage(
                 text, 
                 user.id,
@@ -407,7 +411,7 @@ const AIChatPage: React.FC = () => {
         setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
 
         try {
-            const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
+            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
             const { intent, reply, contextUsed } = await processIncomingMessage(
                 text,
@@ -633,10 +637,10 @@ const AIChatPage: React.FC = () => {
         addLog("System: Vectorizing content...");
 
         try {
-            const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
-            if (!activeKey) throw new Error("Missing API Key. Please add it in Config.");
-
+            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
+            
             // Use the Proxy for embedding to avoid CORS and stick to OpenAI as requested
+            // Note: If activeKey is empty, the Proxy will look for OPENAI_API_KEY in Supabase Secrets
             const { data, error: proxyError } = await supabase.functions.invoke('openai-proxy', {
                 body: { 
                     action: 'embedding', 
@@ -712,7 +716,7 @@ const AIChatPage: React.FC = () => {
             }]);
             
             setTimeout(async () => {
-                 const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
+                 const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
                  const { intent, reply } = await processIncomingMessage(msgText, 'demo', systemInstruction, activeKey);
                  setMessages(prev => prev.map(m => m.id === demoId ? { ...m, intent_tag: intent } : m));
                  setMessages(prev => [...prev, {
@@ -783,9 +787,11 @@ const AIChatPage: React.FC = () => {
                             </CardHeader>
                             <CardContent className="space-y-6">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold text-[#8A9A5B]">API Key (Required)</label>
-                                    <Input required value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-950/50 border-[#8A9A5B]/50 font-mono" placeholder="OpenAI API Key" type="password" />
-                                    <p className="text-xs text-slate-500">Your key is stored locally for security.</p>
+                                    <label className="text-sm font-bold text-[#8A9A5B]">API Key</label>
+                                    <Input value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-950/50 border-[#8A9A5B]/50 font-mono" placeholder="OpenAI API Key (Optional if set in Backend Secrets)" type="password" />
+                                    <p className="text-xs text-slate-500">
+                                        Note: We recommend setting <code>OPENAI_API_KEY</code> in Supabase Secrets for production.
+                                    </p>
                                 </div>
                                 <div className="border-t border-slate-800 my-4"></div>
                                 <div className="grid md:grid-cols-2 gap-6">
@@ -1011,6 +1017,15 @@ const AIChatPage: React.FC = () => {
                                     <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(OPENAI_PROXY_CODE)}>Copy Function Code</Button>
                                     <div className="mt-2 text-xs text-slate-500">
                                         Deploy command: <code className="bg-slate-800 px-1">supabase functions deploy openai-proxy --no-verify-jwt</code>
+                                    </div>
+                                    <div className="mt-4 text-xs text-slate-400 border-t border-slate-800 pt-2">
+                                        <strong>Setup API Key:</strong>
+                                        <br/>
+                                        Go to Supabase Dashboard &gt; Settings &gt; Edge Functions &gt; Add Secret.
+                                        <br/>
+                                        Name: <code>OPENAI_API_KEY</code>
+                                        <br/>
+                                        Value: <code>sk-...</code> (Your OpenAI Key)
                                     </div>
                                 </CardContent>
                             </Card>
