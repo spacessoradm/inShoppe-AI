@@ -17,8 +17,7 @@
     "@supabase/supabase-js": "^2.86.0",
     "openai": "4.28.0",
     "@stripe/stripe-js": "^4.1.0",
-    "pdfjs-dist": "^5.4.449",
-    "@google/genai": "0.1.1"
+    "pdfjs-dist": "^5.4.449"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
