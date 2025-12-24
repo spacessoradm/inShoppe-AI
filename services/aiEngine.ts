@@ -1,35 +1,5 @@
 
-import OpenAI from 'openai';
 import { supabase } from './supabase';
-
-const getOpenAIClient = () => {
-    // 1. Try Local Storage (User Input in UI) - Priority #1
-    //let apiKey = typeof localStorage !== 'undefined' ? localStorage.getItem('openai_api_key') : null;
-    let apiKey = "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";
-
-    // 2. Try Specific Environment Variable (Vite) - Priority #2
-    if (!apiKey) {
-        // @ts-ignore
-        apiKey = import.meta.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    }
-
-    // 3. Fallback to generic API_KEY ONLY if it looks like an OpenAI key (starts with sk-)
-    if (!apiKey && process.env.API_KEY && process.env.API_KEY.startsWith('sk-')) {
-        apiKey = process.env.API_KEY;
-    }
-
-    if (!apiKey) {
-        console.error("OpenAI API Key is missing.");
-        throw new Error("OpenAI API Key is missing. Please enter it in the Config settings.");
-    }
-
-    // CRITICAL: Trim whitespace to prevent 401 errors from copy-paste
-    return new OpenAI({ 
-        apiKey: apiKey.trim(), 
-        dangerouslyAllowBrowser: true 
-    });
-};
-
 
 // --- Real Estate Specific Intents ---
 export type RealEstateIntent = 
@@ -42,13 +12,30 @@ export type RealEstateIntent =
     | 'General Chat'
     | 'Unknown';
 
+// --- Helper: Call AI Proxy ---
+// This prevents CORS errors by routing requests through Supabase Edge Functions
+const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: string) => {
+    if (!supabase) throw new Error("Supabase client not initialized");
+
+    const { data, error } = await supabase.functions.invoke('openai-proxy', {
+        body: { action, apiKey, ...payload }
+    });
+
+    if (error) {
+        console.error(`AI Proxy Error (${action}):`, error);
+        if (error.message?.includes('FunctionsFetchError') || error.message?.includes('Failed to fetch')) {
+             throw new Error("Connection failed. Please deploy the 'openai-proxy' Edge Function.");
+        }
+        throw new Error(error.message || "AI Request Failed");
+    }
+    return data;
+};
+
 // --- 1. INTENT CLASSIFICATION ---
-export const classifyIntent = async (message: string): Promise<RealEstateIntent> => {
+export const classifyIntent = async (message: string, apiKey?: string): Promise<RealEstateIntent> => {
     try {
-        const openai = getOpenAIClient();
-        
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini", // Attempt efficient model
+        const response = await invokeAI('chat', {
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
@@ -73,7 +60,7 @@ export const classifyIntent = async (message: string): Promise<RealEstateIntent>
                 }
             ],
             temperature: 0.0,
-        });
+        }, apiKey);
 
         let tag = response.choices[0]?.message?.content?.replace(/['"]/g, '').replace('Category:', '').trim();
         
@@ -89,13 +76,12 @@ export const classifyIntent = async (message: string): Promise<RealEstateIntent>
         return tag as RealEstateIntent;
     } catch (error) {
         console.error("Intent classification failed:", error);
-        // Fallback to General Chat instead of Unknown to allow flow to continue smoothly
         return 'General Chat'; 
     }
 };
 
 // --- 2. RAG (RETRIEVAL) ---
-export const retrieveContext = async (userId: string, message: string): Promise<string> => {
+export const retrieveContext = async (userId: string, message: string, apiKey?: string): Promise<string> => {
     try {
         if (!supabase) return "";
 
@@ -111,19 +97,18 @@ export const retrieveContext = async (userId: string, message: string): Promise<
             return "";
         }
 
-        const openai = getOpenAIClient();
-        
-        // 2. Create Embedding using OpenAI
-        const embeddingResult = await openai.embeddings.create({
+        // 2. Create Embedding via Proxy
+        const embeddingResult = await invokeAI('embedding', {
             model: "text-embedding-3-small",
             input: message,
             dimensions: 768
-        });
+        }, apiKey);
+
         const queryEmbedding = embeddingResult.data[0].embedding;
 
         if (!queryEmbedding) return "";
 
-        // 3. Search Database
+        // 3. Search Database (RPC)
         const { data: searchResults, error } = await supabase.rpc('match_knowledge', {
             query_embedding: queryEmbedding,
             match_threshold: 0.5,
@@ -151,11 +136,10 @@ export const generateRealEstateResponse = async (
     userMessage: string, 
     intent: RealEstateIntent, 
     context: string,
-    systemInstruction: string
+    systemInstruction: string,
+    apiKey?: string
 ): Promise<string> => {
     try {
-        const openai = getOpenAIClient();
-
         let specificGuidance = "";
         switch (intent) {
             case 'Price/Availability':
@@ -187,24 +171,19 @@ export const generateRealEstateResponse = async (
             ${context || "No specific documents found."}
         `;
 
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini", // Keep 4o-mini, but ensure key is correct
+        const response = await invokeAI('chat', {
+            model: "gpt-4o-mini",
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userMessage }
             ],
             temperature: 0.7,
-        });
+        }, apiKey);
 
         return response.choices[0]?.message?.content || "I am having trouble processing that request. Let me connect you to a human agent.";
 
     } catch (error: any) {
         console.error("Response generation failed:", error);
-        // Return the actual error message to the chat for debugging
-        if (error?.status === 401) return "System Error: 401 Unauthorized. Please check your OpenAI API Key in Config.";
-        if (error?.status === 429) return "System Error: 429 Rate Limit Exceeded. Check your OpenAI quota.";
-        if (error?.status === 404) return "System Error: 404 Model Not Found. Your key may not have access to gpt-4o-mini.";
-        
         return `System Error: ${error.message || "Unable to generate response."}`;
     }
 };
@@ -213,16 +192,17 @@ export const generateRealEstateResponse = async (
 export const processIncomingMessage = async (
     userMessage: string,
     userId: string,
-    systemInstruction: string
+    systemInstruction: string,
+    apiKey?: string
 ) => {
     // Step 1: Tagging
-    const intent = await classifyIntent(userMessage);
+    const intent = await classifyIntent(userMessage, apiKey);
 
     // Step 2: Context
-    const context = await retrieveContext(userId, userMessage);
+    const context = await retrieveContext(userId, userMessage, apiKey);
 
     // Step 3: Reply
-    const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction);
+    const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction, apiKey);
 
     return {
         intent,

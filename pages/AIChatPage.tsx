@@ -6,7 +6,6 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
 import { cn } from '../lib/utils';
-import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -55,7 +54,7 @@ const getEnv = (key: string) => {
     return val;
 };
 
-// --- EDGE FUNCTION CODE SNIPPET ---
+// --- EDGE FUNCTION CODE SNIPPET (TWILIO WEBHOOK) ---
 const EDGE_FUNCTION_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -64,28 +63,22 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 
 serve(async (req) => {
-  // 1. Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } })
   }
 
   try {
-    // 2. Parse Twilio Payload (FormData)
     const formData = await req.formData()
     const incomingMsg = formData.get('Body')?.toString() || ''
     
-    // Twilio sends numbers like 'whatsapp:+1234567890'
-    // We need to remove the 'whatsapp:' prefix to match our database format
     let senderPhone = formData.get('From')?.toString() || ''
     let merchantPhone = formData.get('To')?.toString() || ''
 
     senderPhone = senderPhone.replace('whatsapp:', '')
     merchantPhone = merchantPhone.replace('whatsapp:', '')
 
-    // 3. Initialize Supabase Admin Client
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // 4. FIND USER ID based on Twilio Phone Number
     const { data: profile } = await supabase
       .from('profiles')
       .select('id')
@@ -94,14 +87,10 @@ serve(async (req) => {
 
     if (!profile) return new Response('Profile not found', { status: 404 })
 
-    const userId = profile.id
-
-    // 5. Insert Message into Database
-    // NOTE: We mark it as 'Processing...' so the Frontend AI Engine picks it up via Realtime
     const { error: insertError } = await supabase
       .from('messages')
       .insert({
-        user_id: userId, 
+        user_id: profile.id, 
         text: incomingMsg,
         sender: 'user',
         direction: 'inbound',
@@ -123,6 +112,48 @@ serve(async (req) => {
 })
 `;
 
+// --- OPENAI PROXY CODE SNIPPET (NEW) ---
+const OPENAI_PROXY_CODE = `
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import OpenAI from 'https://esm.sh/openai@4.28.0'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
+  try {
+    const { action, apiKey, ...payload } = await req.json()
+    const finalApiKey = apiKey || Deno.env.get('OPENAI_API_KEY')
+    
+    if (!finalApiKey) throw new Error('Missing OpenAI API Key')
+
+    const openai = new OpenAI({ apiKey: finalApiKey })
+
+    if (action === 'chat') {
+      const completion = await openai.chat.completions.create(payload)
+      return new Response(JSON.stringify(completion), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    if (action === 'embedding') {
+      const embedding = await openai.embeddings.create(payload)
+      return new Response(JSON.stringify(embedding), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    throw new Error('Invalid action')
+
+  } catch (error) {
+    return new Response(JSON.stringify({ error: error.message }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 400,
+    })
+  }
+})
+`;
+
 const AIChatPage: React.FC = () => {
     const { user, profile, organization, deductCredit } = useAuth();
     const navigate = useNavigate();
@@ -130,7 +161,7 @@ const AIChatPage: React.FC = () => {
     // --- View State ---
     const [mode, setMode] = useState<ViewMode>('landing');
     const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-    const [aiStatus, setAiStatus] = useState<string>(''); // For visual feedback
+    const [aiStatus, setAiStatus] = useState<string>('');
     
     // --- State: Configuration ---
     const [loading, setLoading] = useState(false);
@@ -140,7 +171,7 @@ const AIChatPage: React.FC = () => {
     const [authToken, setAuthToken] = useState(() => getEnv('VITE_TWILIO_AUTH_TOKEN') || getEnv('TWILIO_AUTH_TOKEN') || '');
     const [myPhoneNumber, setMyPhoneNumber] = useState(() => getEnv('VITE_TWILIO_PHONE_NUMBER') || getEnv('TWILIO_PHONE_NUMBER') || '');
     const [webhookUrl, setWebhookUrl] = useState('https://rwlecxyfukzberxcpqnr.supabase.co/functions/v1/dynamic-endpoint');
-    const [apiKey, setApiKey] = useState(''); // Renamed from openaiApiKey for clarity
+    const [apiKey, setApiKey] = useState('');
     
     // --- State: Webhook ---
     const [webhookStatus, setWebhookStatus] = useState<'idle' | 'checking' | 'success' | 'error'>('idle');
@@ -149,7 +180,6 @@ const AIChatPage: React.FC = () => {
     const [systemInstruction, setSystemInstruction] = useState(
         "You are inShoppe AI, a top-tier Real Estate Sales Agent. Your goal is to qualify leads, provide accurate property details, and schedule viewings. Be professional, persuasive, and concise."
     );
-    // Ref to access systemInstruction inside callbacks/effects without stale closures
     const systemInstructionRef = useRef(systemInstruction);
 
     // --- State: Knowledge Base ---
@@ -218,17 +248,15 @@ const AIChatPage: React.FC = () => {
         e.preventDefault();
         setLoading(true);
 
-        // Save Key locally
         if (apiKey) localStorage.setItem('openai_api_key', apiKey); 
 
-        // Save local fallback
         localStorage.setItem('twilio_user_config', JSON.stringify({
              accountSid, authToken, phoneNumber: myPhoneNumber, webhookUrl, systemInstruction
         }));
 
         if (supabase && user) {
             try {
-                const { error } = await supabase.from('user_settings').upsert({
+                await supabase.from('user_settings').upsert({
                     user_id: user.id,
                     twilio_account_sid: accountSid,
                     twilio_auth_token: authToken,
@@ -237,7 +265,6 @@ const AIChatPage: React.FC = () => {
                     system_instruction: systemInstruction,
                     updated_at: new Date().toISOString()
                 });
-                if (error) throw error;
             } catch (err: any) {
                 console.error("Error saving settings to DB:", err);
                 addLog(`Settings Save Error: ${err.message}`);
@@ -248,10 +275,8 @@ const AIChatPage: React.FC = () => {
         setMode('dashboard');
     };
 
-    // --- Effect: Load Config ---
     useEffect(() => {
         const loadConfig = async () => {
-            // Load API Key from local storage first
             const localKey = localStorage.getItem('openai_api_key');
             if (localKey) setApiKey(localKey);
 
@@ -298,13 +323,11 @@ const AIChatPage: React.FC = () => {
         loadConfig();
     }, [user, mode]);
 
-    // --- Effect: Load Knowledge Base ---
     useEffect(() => {
         if (!supabase || mode !== 'dashboard' || !organization) return;
         fetchKnowledgeBase();
     }, [mode, organization]);
 
-    // --- TWILIO SENDER ---
     const sendToTwilio = async (to: string, body: string) => {
         if (!accountSid || !authToken || !myPhoneNumber) {
             addLog("System: ⚠️ Twilio credentials missing. Reply saved to DB but not sent to WhatsApp.");
@@ -314,7 +337,6 @@ const AIChatPage: React.FC = () => {
         const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
         const formData = new URLSearchParams();
         
-        // Ensure numbers have whatsapp: prefix if missing
         let targetPhone = to.trim();
         if (!targetPhone.includes('whatsapp:')) {
             targetPhone = `whatsapp:${targetPhone}`;
@@ -348,24 +370,24 @@ const AIChatPage: React.FC = () => {
         } catch (error: any) {
             console.error("Twilio Send Error:", error);
             addLog(`Error: Twilio Send Failed - ${error.message}`);
-            // Specific hint for common browser issue
             if (error.message.includes('Failed to fetch')) {
                  addLog("Hint: Browser blocked Twilio call (CORS). Use an Edge Function or Proxy for production.");
             }
         }
     };
 
-    // --- MANUAL CLASSIFICATION TRIGGER ---
     const classifyMessage = async (msgId: string, text: string, verbose = true) => {
         if (!supabase || !user) return;
         if (verbose) setAiStatus('Classifying...');
         try {
             setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
             
+            const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
             const { intent } = await processIncomingMessage(
                 text, 
                 user.id,
-                systemInstructionRef.current // Use Ref for latest value
+                systemInstructionRef.current,
+                activeKey
             );
             
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
@@ -376,31 +398,28 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // --- AI PROCESSING CORE ---
-    // This function handles the AI logic for a new message
     const processAndReplyToMessage = async (msgId: string, text: string, phone: string) => {
         if (!supabase || !user) return;
         
         addLog(`AI Brain: 🧠 Processing message [${msgId}]...`);
         setAiStatus('Analyzing...');
 
-        // 1. Mark as Analysing in UI (Optimistic)
         setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
 
         try {
-            // 2. Call AI Engine
+            const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
+            
             const { intent, reply, contextUsed } = await processIncomingMessage(
                 text,
                 user.id,
-                systemInstructionRef.current
+                systemInstructionRef.current,
+                activeKey
             );
 
-            // 3. Update the User Message with Intent Tag
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
 
-            // 4. Send Bot Reply (DB INSERT)
             setAiStatus(contextUsed ? 'Searching Knowledge...' : 'Replying...');
-            await new Promise(resolve => setTimeout(resolve, 500)); // Natural delay
+            await new Promise(resolve => setTimeout(resolve, 500));
 
             await supabase.from('messages').insert({
                 user_id: user.id,
@@ -413,8 +432,7 @@ const AIChatPage: React.FC = () => {
             addLog(`AI Brain: ✅ Replied to [${msgId}] internally.`);
             setAiStatus('');
 
-            // 5. Send to Twilio (Outbound to Customer)
-            if (webhookUrl) { // Only attempt if live mode (webhookUrl set)
+            if (webhookUrl) {
                 await sendToTwilio(phone, reply);
             }
 
@@ -425,7 +443,6 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // --- Effect: Fetch History & Realtime Subscription ---
     useEffect(() => {
         if (mode !== 'dashboard') return;
 
@@ -481,7 +498,6 @@ const AIChatPage: React.FC = () => {
 
         fetchHistory();
 
-        // --- REALTIME LISTENER (The Brain) ---
         if (supabase && user) {
             const channel = supabase
                 .channel('chat-updates')
@@ -497,7 +513,6 @@ const AIChatPage: React.FC = () => {
                         const newMsg = payload.new;
                         const msgId = newMsg.id.toString();
                         
-                        // 1. Update UI
                         const formattedMsg: SimMessage = {
                             id: msgId,
                             text: newMsg.text,
@@ -521,13 +536,10 @@ const AIChatPage: React.FC = () => {
                         
                         if (!selectedPhone) setSelectedPhone(newMsg.phone);
 
-                        // 2. TRIGGER AI LOGIC
-                        // Only trigger if message is INBOUND/USER and tag is "Processing..." (or null)
                         if (
                             (newMsg.direction === 'inbound' || newMsg.sender === 'user') && 
                             (!newMsg.intent_tag || newMsg.intent_tag === 'Processing...')
                         ) {
-                            // Call the AI Brain
                             processAndReplyToMessage(msgId, newMsg.text, newMsg.phone);
                         }
                     }
@@ -556,12 +568,10 @@ const AIChatPage: React.FC = () => {
         }
     }, [mode, user]); 
 
-    // --- Auto Scroll ---
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, selectedPhone, mode, aiStatus]);
 
-    // --- Knowledge Base Logic ---
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -572,10 +582,7 @@ const AIChatPage: React.FC = () => {
             let text = '';
             
             if (file.type === 'application/pdf') {
-                // Dynamically import PDF.js to avoid load-time crashes
                 const pdfjsImport = await import('pdfjs-dist/build/pdf');
-                
-                // Robustly handle export structure (Namespace vs Default)
                 const pdfjsLib = pdfjsImport.default || pdfjsImport;
                 
                 if (pdfjsLib.GlobalWorkerOptions) {
@@ -623,26 +630,27 @@ const AIChatPage: React.FC = () => {
     const addKnowledge = async () => {
         if (!knowledgeInput.trim() || !supabase || !organization) return;
         setIsEmbedding(true);
-        addLog("System: Vectorizing content (Gemini)...");
+        addLog("System: Vectorizing content...");
 
         try {
             const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
-            
-            if (!activeKey) {
-                throw new Error("Missing API Key. Please add it in Config.");
-            }
+            if (!activeKey) throw new Error("Missing API Key. Please add it in Config.");
 
-            const ai = new GoogleGenAI({ apiKey: activeKey.trim() });
-            
-            const embeddingResult = await ai.models.embedContent({
-                model: "text-embedding-004",
-                contents: knowledgeInput,
+            // Use the Proxy for embedding to avoid CORS and stick to OpenAI as requested
+            const { data, error: proxyError } = await supabase.functions.invoke('openai-proxy', {
+                body: { 
+                    action: 'embedding', 
+                    apiKey: activeKey, 
+                    model: "text-embedding-3-small", 
+                    input: knowledgeInput 
+                }
             });
-            const embedding = embeddingResult.embeddings?.[0]?.values;
+
+            if (proxyError) throw new Error(proxyError.message || "Proxy Error");
             
-            if (!embedding) {
-                 throw new Error("Failed to generate embedding: No values returned.");
-            }
+            const embedding = data.data[0].embedding;
+            
+            if (!embedding) throw new Error("Failed to generate embedding: No values returned.");
 
             const { error } = await supabase.from('knowledge').insert({
                 organization_id: organization.id,
@@ -663,7 +671,6 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // --- Simulator Send ---
     const handleSimulatorSend = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!input.trim()) return;
@@ -705,7 +712,8 @@ const AIChatPage: React.FC = () => {
             }]);
             
             setTimeout(async () => {
-                 const { intent, reply } = await processIncomingMessage(msgText, 'demo', systemInstruction);
+                 const activeKey = apiKey || getEnv('VITE_GEMINI_API_KEY') || getEnv('API_KEY');
+                 const { intent, reply } = await processIncomingMessage(msgText, 'demo', systemInstruction, activeKey);
                  setMessages(prev => prev.map(m => m.id === demoId ? { ...m, intent_tag: intent } : m));
                  setMessages(prev => [...prev, {
                     id: (Date.now() + 1).toString(), text: reply, sender: 'bot', direction: 'outbound', 
@@ -726,7 +734,6 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    // --- Render Logic ---
     if (mode === 'landing') {
         return (
             <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-slate-950/50">
@@ -777,7 +784,7 @@ const AIChatPage: React.FC = () => {
                             <CardContent className="space-y-6">
                                 <div className="space-y-2">
                                     <label className="text-sm font-bold text-[#8A9A5B]">API Key (Required)</label>
-                                    <Input required value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-950/50 border-[#8A9A5B]/50 font-mono" placeholder="Gemini API Key" type="password" />
+                                    <Input required value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-950/50 border-[#8A9A5B]/50 font-mono" placeholder="OpenAI API Key" type="password" />
                                     <p className="text-xs text-slate-500">Your key is stored locally for security.</p>
                                 </div>
                                 <div className="border-t border-slate-800 my-4"></div>
@@ -845,7 +852,7 @@ const AIChatPage: React.FC = () => {
                          <TabsList className="bg-transparent gap-4">
                             <TabsTrigger value="chat" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Live Chats</TabsTrigger>
                             <TabsTrigger value="knowledge" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Knowledge Base (RAG)</TabsTrigger>
-                            <TabsTrigger value="status" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Webhook Status</TabsTrigger>
+                            <TabsTrigger value="status" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Connection Status</TabsTrigger>
                             <TabsTrigger value="logs" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">System Logs</TabsTrigger>
                         </TabsList>
                     </div>
@@ -958,7 +965,7 @@ const AIChatPage: React.FC = () => {
                                 <CardContent className="space-y-4">
                                     <textarea value={knowledgeInput} onChange={(e) => setKnowledgeInput(e.target.value)} className="w-full h-32 bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm focus:ring-1 focus:ring-blue-500" placeholder="Paste text here or upload a file..." />
                                     <div className="flex justify-between items-center">
-                                        <p className="text-xs text-slate-500">Note: Content is converted to vectors using Gemini Embeddings and stored in Supabase.</p>
+                                        <p className="text-xs text-slate-500">Note: Content is converted to vectors using OpenAI Embeddings via Proxy.</p>
                                         <Button onClick={addKnowledge} disabled={isEmbedding || !knowledgeInput.trim()} className="bg-blue-600 hover:bg-blue-500">{isEmbedding ? 'Vectorizing...' : 'Add to Knowledge Base'}</Button>
                                     </div>
                                 </CardContent>
@@ -977,28 +984,42 @@ const AIChatPage: React.FC = () => {
                      </TabsContent>
 
                     <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0">
-                        <div className="max-w-2xl mx-auto space-y-6">
+                        <div className="max-w-3xl mx-auto space-y-6">
                             <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
-                                <CardHeader><CardTitle>Webhook Connection</CardTitle><CardDescription>Test connectivity.</CardDescription></CardHeader>
+                                <CardHeader><CardTitle>Webhook Connection</CardTitle><CardDescription>Test connectivity to your Supabase Edge Function.</CardDescription></CardHeader>
                                 <CardContent className="space-y-4">
                                     <div className="flex gap-2">
                                         <Input readOnly value={webhookUrl || "No URL Configured"} className="bg-slate-950 font-mono text-blue-300" />
                                         <Button onClick={checkWebhookReachability}>Test Ping</Button>
                                     </div>
+                                    <div className="text-sm text-slate-400">
+                                        <p>Status: <span className={cn("font-bold", webhookStatus === 'success' ? "text-green-400" : webhookStatus === 'error' ? "text-red-400" : "text-slate-500")}>{webhookStatus}</span></p>
+                                    </div>
                                 </CardContent>
                             </Card>
-                             <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
-                                <CardHeader><CardTitle>Edge Function Code</CardTitle></CardHeader>
+                            
+                            {/* OpenAI Proxy Code Display */}
+                             <Card className="border border-blue-500/30 bg-blue-900/10 text-white">
+                                <CardHeader>
+                                    <CardTitle className="text-blue-300">Required: OpenAI Proxy Function</CardTitle>
+                                    <CardDescription>
+                                        To fix CORS errors, you MUST deploy this function to Supabase as <code>openai-proxy</code>.
+                                    </CardDescription>
+                                </CardHeader>
                                 <CardContent>
-                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-300 font-mono border border-slate-800 max-h-[300px]"><pre>{EDGE_FUNCTION_CODE}</pre></div>
-                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Code</Button>
+                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-300 font-mono border border-slate-800 max-h-[300px]"><pre>{OPENAI_PROXY_CODE}</pre></div>
+                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(OPENAI_PROXY_CODE)}>Copy Function Code</Button>
+                                    <div className="mt-2 text-xs text-slate-500">
+                                        Deploy command: <code className="bg-slate-800 px-1">supabase functions deploy openai-proxy --no-verify-jwt</code>
+                                    </div>
                                 </CardContent>
                             </Card>
+
                             <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
-                                <CardHeader><CardTitle>Supabase SQL Setup</CardTitle></CardHeader>
+                                <CardHeader><CardTitle>Twilio Webhook Function</CardTitle></CardHeader>
                                 <CardContent>
-                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-blue-300 font-mono border border-slate-800 max-h-[300px]">{MASTER_SQL_SCRIPT}</div>
-                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(MASTER_SQL_SCRIPT)}>Copy SQL</Button>
+                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px]"><pre>{EDGE_FUNCTION_CODE}</pre></div>
+                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Code</Button>
                                 </CardContent>
                             </Card>
                         </div>
