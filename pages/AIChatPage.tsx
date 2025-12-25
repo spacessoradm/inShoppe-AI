@@ -9,15 +9,17 @@ import { cn } from '../lib/utils';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { MASTER_SQL_SCRIPT } from '../components/SupabaseSetup';
 import { processIncomingMessage } from '../services/aiEngine';
+// New Components
+import { ChatList } from '../components/ai-chat/ChatList';
+import { ChatWindow } from '../components/ai-chat/ChatWindow';
 
 // Types
 interface SimMessage {
   id: string;
   text: string;
   sender: 'user' | 'bot' | 'system';
-  direction?: 'inbound' | 'outbound';
+  direction: 'inbound' | 'outbound';
   timestamp: string; 
   fullTimestamp: number;
   phone?: string;
@@ -172,6 +174,7 @@ const AIChatPage: React.FC = () => {
     const [mode, setMode] = useState<ViewMode>('landing');
     const [isHistoryLoading, setIsHistoryLoading] = useState(false);
     const [aiStatus, setAiStatus] = useState<string>('');
+    const [searchQuery, setSearchQuery] = useState('');
     
     // --- State: Configuration ---
     const [loading, setLoading] = useState(false);
@@ -187,7 +190,6 @@ const AIChatPage: React.FC = () => {
     const [webhookStatus, setWebhookStatus] = useState<'idle' | 'checking' | 'success' | 'error'>('idle');
     
     // --- State: AI ---
-    // UPDATED DEFAULT SYSTEM INSTRUCTION FOR SENIOR AGENT PERSONA
     const [systemInstruction, setSystemInstruction] = useState(
         "You are a Senior Real Estate Sales Agent at inShoppe. Your primary objective is to QUALIFY leads, ADVANCE them to the next sales step, and SECURE VIEWING BOOKINGS or human handover. Be confident, professional, and helpful."
     );
@@ -387,9 +389,9 @@ const AIChatPage: React.FC = () => {
         }
     };
 
-    const classifyMessage = async (msgId: string, text: string, verbose = true) => {
+    const classifyMessage = async (msgId: string, text: string) => {
         if (!supabase || !user) return;
-        if (verbose) setAiStatus('Classifying...');
+        setAiStatus('Classifying...');
         try {
             setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
             
@@ -408,10 +410,10 @@ const AIChatPage: React.FC = () => {
             const { intent } = result;
             
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
-            if (verbose) setAiStatus('');
+            setAiStatus('');
         } catch (e) {
             console.error("Classification error", e);
-            if (verbose) setAiStatus('Error');
+            setAiStatus('Error');
             await supabase.from('messages').update({ intent_tag: 'Manual Review' }).eq('id', msgId);
         }
     };
@@ -471,7 +473,6 @@ const AIChatPage: React.FC = () => {
             addLog(`Error: AI Failed - ${error.message}`);
             setAiStatus('Error');
             
-            // CRITICAL FIX: Send a fallback message so the user gets *something* even if AI crashes
             const fallbackReply = "I apologize, but I am experiencing high traffic. A human agent will be with you shortly.";
             
             await supabase.from('messages').insert({
@@ -510,7 +511,7 @@ const AIChatPage: React.FC = () => {
                             id: msg.id.toString(),
                             text: msg.text,
                             sender: msg.direction === 'inbound' ? 'user' : (msg.sender === 'user' ? 'user' : 'bot'),
-                            direction: msg.direction,
+                            direction: msg.direction || (msg.sender === 'user' ? 'inbound' : 'outbound'),
                             timestamp: new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                             fullTimestamp: new Date(msg.created_at).getTime(),
                             phone: msg.phone,
@@ -564,7 +565,7 @@ const AIChatPage: React.FC = () => {
                             id: msgId,
                             text: newMsg.text,
                             sender: newMsg.direction === 'inbound' ? 'user' : 'bot',
-                            direction: newMsg.direction,
+                            direction: newMsg.direction || (newMsg.sender === 'user' ? 'inbound' : 'outbound'),
                             timestamp: new Date(newMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                             fullTimestamp: new Date(newMsg.created_at).getTime(),
                             phone: newMsg.phone,
@@ -615,111 +616,9 @@ const AIChatPage: React.FC = () => {
         }
     }, [mode, user]); 
 
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, selectedPhone, mode, aiStatus]);
-
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        addLog(`System: Parsing ${file.name}...`);
-
-        try {
-            let text = '';
-            
-            if (file.type === 'application/pdf') {
-                const pdfjsImport = await import('pdfjs-dist/build/pdf');
-                const pdfjsLib = pdfjsImport.default || pdfjsImport;
-                
-                if (pdfjsLib.GlobalWorkerOptions) {
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
-                }
-
-                const arrayBuffer = await file.arrayBuffer();
-                const loadingTask = pdfjsLib.getDocument({ 
-                    data: arrayBuffer,
-                    cMapUrl: 'https://aistudiocdn.com/pdfjs-dist@4.0.379/cmaps/',
-                    cMapPacked: true,
-                });
-                const pdf = await loadingTask.promise;
-                const maxPages = pdf.numPages;
-                
-                for (let i = 1; i <= maxPages; i++) {
-                    const page = await pdf.getPage(i);
-                    const textContent = await page.getTextContent();
-                    const pageText = textContent.items.map((item: any) => item.str).join(' ');
-                    text += pageText + '\n\n';
-                }
-            } else {
-                text = await new Promise<string>((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = (event) => resolve(event.target?.result as string);
-                    reader.onerror = (error) => reject(error);
-                    reader.readAsText(file);
-                });
-            }
-
-            if (!text || text.trim().length === 0) {
-                addLog("Warning: No text extracted. File might be empty.");
-                return;
-            }
-
-            setKnowledgeInput(text.slice(0, 15000));
-            addLog(`System: Extracted ${text.length} chars. Ready to vectorize.`);
-
-        } catch (error: any) {
-            console.error("File parsing error:", error);
-            addLog(`Error parsing file: ${error.message}`);
-        }
-    };
-
-    const addKnowledge = async () => {
-        if (!knowledgeInput.trim() || !supabase || !organization) return;
-        setIsEmbedding(true);
-        addLog("System: Vectorizing content...");
-
-        try {
-            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-            
-            const { data, error: proxyError } = await supabase.functions.invoke('openai-proxy', {
-                body: { 
-                    action: 'embedding', 
-                    apiKey: activeKey, 
-                    model: "text-embedding-3-small", 
-                    input: knowledgeInput 
-                }
-            });
-
-            if (proxyError) throw new Error(proxyError.message || "Proxy Error");
-            if (data.error) throw new Error(data.error);
-            
-            const embedding = data.data[0].embedding;
-            
-            if (!embedding) throw new Error("Failed to generate embedding: No values returned.");
-
-            const { error } = await supabase.from('knowledge').insert({
-                organization_id: organization.id,
-                content: knowledgeInput,
-                embedding: embedding
-            });
-
-            if (error) throw error;
-            addLog("System: Knowledge saved to Vector DB.");
-            setKnowledgeInput('');
-            fetchKnowledgeBase();
-
-        } catch (err: any) {
-            console.error(err);
-            addLog(`Error: ${err.message}`);
-        } finally {
-            setIsEmbedding(false);
-        }
-    };
-
-    const handleSimulatorSend = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!input.trim()) return;
+    // Handle Manual Send from new ChatWindow
+    const handleSimulatorSend = async (text: string) => {
+        if (!text.trim()) return;
         
         const hasCredit = await deductCredit();
         if (!hasCredit) {
@@ -729,19 +628,19 @@ const AIChatPage: React.FC = () => {
                 sender: 'system',
                 timestamp: new Date().toLocaleTimeString(),
                 fullTimestamp: Date.now(),
+                direction: 'outbound' // System messages shown as outbound-ish
              }]);
              return;
         }
 
         const targetPhone = selectedPhone || '+60123456789';
-        const msgText = input;
         setInput(''); 
-
+        
         if (supabase && user) {
              const { error } = await supabase.from('messages').insert({
                 user_id: user.id,
-                text: msgText,
-                sender: 'user',
+                text: text,
+                sender: 'user', // Simulate Customer
                 direction: 'inbound',
                 phone: targetPhone,
                 intent_tag: 'Processing...'
@@ -752,14 +651,14 @@ const AIChatPage: React.FC = () => {
         } else {
             const demoId = Date.now().toString();
             setMessages(prev => [...prev, {
-                id: demoId, text: msgText, sender: 'user', direction: 'inbound', 
+                id: demoId, text: text, sender: 'user', direction: 'inbound', 
                 timestamp: new Date().toLocaleTimeString(), fullTimestamp: Date.now(), 
                 phone: targetPhone, intent_tag: 'Analysing...'
             }]);
             
             setTimeout(async () => {
                  const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-                 const { intent, reply } = await processIncomingMessage(msgText, 'demo', systemInstruction, activeKey);
+                 const { intent, reply } = await processIncomingMessage(text, 'demo', systemInstructionRef.current, activeKey);
                  setMessages(prev => prev.map(m => m.id === demoId ? { ...m, intent_tag: intent } : m));
                  setMessages(prev => [...prev, {
                     id: (Date.now() + 1).toString(), text: reply, sender: 'bot', direction: 'outbound', 
@@ -769,14 +668,82 @@ const AIChatPage: React.FC = () => {
         }
     };
 
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const text = e.target?.result;
+                if (typeof text === 'string') {
+                    setKnowledgeInput(text);
+                }
+            };
+            reader.readAsText(file);
+        }
+    };
+
+    const addKnowledge = async () => {
+        if (!knowledgeInput.trim() || !supabase || !organization) return;
+        setIsEmbedding(true);
+        try {
+            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
+            // Replicating invokeAI logic for embedding
+            const { data, error } = await supabase.functions.invoke('openai-proxy', {
+                body: { 
+                    action: 'embedding', 
+                    apiKey: activeKey,
+                    model: "text-embedding-3-small",
+                    input: knowledgeInput,
+                    dimensions: 768
+                }
+            });
+
+            if (error) throw new Error(error.message);
+            if (data?.error) throw new Error(data.error);
+
+            if (data?.data?.[0]?.embedding) {
+                 const { error: dbError } = await supabase.from('knowledge').insert({
+                    organization_id: organization.id,
+                    content: knowledgeInput,
+                    embedding: data.data[0].embedding,
+                    metadata: { source: 'manual', date: new Date().toISOString() }
+                });
+                if (dbError) throw dbError;
+                
+                setKnowledgeInput('');
+                addLog('System: Knowledge added successfully.');
+                fetchKnowledgeBase();
+            }
+        } catch (e: any) {
+            console.error("Add Knowledge Error:", e);
+            addLog(`Error: ${e.message}`);
+        } finally {
+            setIsEmbedding(false);
+        }
+    };
+
     const checkWebhookReachability = async () => {
         if (!webhookUrl) return;
         setWebhookStatus('checking');
         try {
-            await fetch(webhookUrl, { method: 'POST', body: JSON.stringify({ type: 'ping' }), mode: 'no-cors' });
-            setWebhookStatus('success');
-        } catch (e) {
+            const response = await fetch(webhookUrl, {
+                method: 'POST',
+                body: new URLSearchParams({
+                    Body: 'Ping from Dashboard',
+                    From: 'whatsapp:+0000000000',
+                    To: 'whatsapp:+0000000000'
+                })
+            });
+            if (response.ok) {
+                setWebhookStatus('success');
+                addLog('System: Webhook reachable.');
+            } else {
+                setWebhookStatus('error');
+                addLog(`System: Webhook returned ${response.status}`);
+            }
+        } catch (e: any) {
             setWebhookStatus('error');
+            addLog(`System: Webhook unreachable. ${e.message}`);
         }
     };
 
@@ -896,103 +863,62 @@ const AIChatPage: React.FC = () => {
 
             <div className="flex-1 overflow-hidden">
                 <Tabs defaultValue="chat" className="h-full flex flex-col">
-                    <div className="px-4 pt-2 bg-slate-900/50 border-b border-slate-800 shrink-0">
-                         <TabsList className="bg-transparent gap-4">
-                            <TabsTrigger value="chat" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Live Chats</TabsTrigger>
-                            <TabsTrigger value="knowledge" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Knowledge Base (RAG)</TabsTrigger>
-                            <TabsTrigger value="status" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">Connection Status</TabsTrigger>
-                            <TabsTrigger value="logs" className="data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 rounded-none border-b-2 border-transparent data-[state=active]:border-blue-500 pb-2 px-1">System Logs</TabsTrigger>
+                    <div className="px-6 pt-2 bg-[#0b101a] border-b border-slate-800 shrink-0">
+                         <TabsList className="bg-transparent h-12 gap-6 p-0">
+                            <TabsTrigger 
+                                value="chat" 
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                            >
+                                Live Chats
+                            </TabsTrigger>
+                            <TabsTrigger 
+                                value="knowledge" 
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                            >
+                                Knowledge Base (RAG)
+                            </TabsTrigger>
+                            <TabsTrigger 
+                                value="status" 
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                            >
+                                Connection Status
+                            </TabsTrigger>
+                            <TabsTrigger 
+                                value="logs" 
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                            >
+                                System Logs
+                            </TabsTrigger>
                         </TabsList>
                     </div>
 
-                    <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0">
-                        <div className="w-[300px] border-r border-slate-800 flex flex-col bg-slate-900/30">
-                            <div className="p-3 border-b border-slate-800">
-                                <Input placeholder="Search chats..." className="bg-slate-950 border-slate-800 h-8 text-xs" />
-                            </div>
-                            <div className="flex-1 overflow-y-auto relative">
-                                {isHistoryLoading && chats.length === 0 && (
-                                     <div className="p-4 text-center">
-                                         <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
-                                         <p className="text-xs text-slate-500">Syncing history...</p>
-                                     </div>
-                                )}
-                                {!isHistoryLoading && chats.length === 0 && (
-                                    <div className="p-4 text-center text-xs text-slate-500">No active chats</div>
-                                )}
-                                {chats.map(([phone, msgs]) => (
-                                    <div key={phone} onClick={() => setSelectedPhone(phone)} className={cn("p-3 border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/50 transition-colors", selectedPhone === phone && "bg-slate-800 border-l-2 border-l-blue-500")}>
-                                        <div className="flex justify-between items-start mb-1">
-                                            <span className="font-semibold text-sm text-slate-200">{phone}</span>
-                                            <span className="text-[10px] text-slate-500">{msgs[msgs.length-1].timestamp}</span>
-                                        </div>
-                                        <p className="text-xs text-slate-400 truncate pr-2">
-                                            {msgs[msgs.length-1].direction === 'outbound' ? 'You: ' : ''}
-                                            {msgs[msgs.length-1].text}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
+                    <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-[#0b101a]">
+                        <div className={cn(
+                            "flex-col border-r border-slate-800 bg-slate-900/30 transition-all",
+                            selectedPhone ? "hidden md:flex w-[320px]" : "flex w-full md:w-[320px]"
+                        )}>
+                            <ChatList 
+                                chats={chats} 
+                                selectedPhone={selectedPhone} 
+                                onSelect={setSelectedPhone}
+                                searchQuery={searchQuery}
+                                onSearchChange={setSearchQuery}
+                            />
                         </div>
-                        <div className="flex-1 flex flex-col bg-[#0b101a] relative">
-                            {selectedPhone ? (
-                                <>
-                                    <div className="h-14 border-b border-slate-800 flex items-center px-4 bg-slate-900/60 backdrop-blur justify-between">
-                                        <div className="flex items-center">
-                                            <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center text-white text-xs font-bold">{selectedPhone.slice(1,3)}</div>
-                                            <div className="ml-3">
-                                                <h3 className="text-sm font-semibold text-white">{selectedPhone}</h3>
-                                                <p className="text-[10px] text-green-400 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Active now</p>
-                                            </div>
-                                        </div>
-                                        {aiStatus && (
-                                            <div className="flex items-center gap-2 px-3 py-1 bg-blue-500/10 rounded-full border border-blue-500/20 shadow-lg shadow-blue-900/20">
-                                                <div className="flex gap-1">
-                                                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                                                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                                                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce"></div>
-                                                </div>
-                                                <span className="text-xs text-blue-300 font-medium">{aiStatus}</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[url('https://i.pinimg.com/originals/97/c0/07/97c00759d90d786d9b6096d274ad3e07.png')] bg-repeat bg-[length:400px]">
-                                        {(chats.find(([p]) => p === selectedPhone)?.[1] || []).map(msg => (
-                                            <div key={msg.id} className={cn("flex w-full flex-col", msg.direction === 'outbound' ? "items-end" : "items-start")}>
-                                                 {(msg.sender === 'user' || msg.direction === 'inbound') && (
-                                                     <div className="flex items-center gap-1 mb-1 ml-1 animate-fadeInUp">
-                                                         {msg.intent_tag ? (
-                                                             <span className="text-[9px] text-blue-300 bg-blue-900/60 border border-blue-800 px-2 py-0.5 rounded-full backdrop-blur-md shadow-sm uppercase tracking-wider font-semibold">
-                                                                 {(msg.intent_tag === 'Analysing...' || msg.intent_tag === 'Processing...') && <span className="inline-block w-1.5 h-1.5 bg-blue-400 rounded-full mr-1.5 animate-pulse"></span>}
-                                                                 {msg.intent_tag}
-                                                             </span>
-                                                         ) : (
-                                                             <button onClick={() => classifyMessage(msg.id, msg.text)} className="text-[9px] text-slate-500 hover:text-blue-400 flex items-center gap-1 transition-colors px-2 py-0.5 rounded-full hover:bg-slate-800/50">✨ Analyze</button>
-                                                         )}
-                                                     </div>
-                                                 )}
-                                                 <div className={cn("max-w-[70%] rounded-lg px-3 py-2 text-sm shadow-sm relative", msg.direction === 'outbound' ? "bg-[#005c4b] text-white rounded-tr-none" : msg.sender === 'system' ? "bg-red-900/50 text-red-200 border border-red-800" : "bg-slate-800 text-slate-200 rounded-tl-none")}>
-                                                    {msg.text}
-                                                    <div className="flex justify-between items-center mt-1 gap-2">
-                                                        <span className="text-[9px] text-white/40 uppercase">{msg.direction}</span>
-                                                        <span className="text-[10px] text-white/50">{msg.timestamp}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                        <div ref={messagesEndRef} />
-                                    </div>
-                                    <form onSubmit={handleSimulatorSend} className="p-3 bg-slate-900 border-t border-slate-800 flex gap-2">
-                                        <Input value={input} onChange={e => setInput(e.target.value)} placeholder="Type a message (Simulates User Input)..." className="bg-slate-950 border-slate-700" />
-                                        <Button type="submit" size="icon" className="bg-blue-600 hover:bg-blue-500"><SendIcon className="w-4 h-4" /></Button>
-                                    </form>
-                                </>
-                            ) : (
-                                <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
-                                    <div className="h-16 w-16 bg-slate-800 rounded-full flex items-center justify-center mb-4"><ChatIcon className="h-8 w-8 text-slate-600" /></div>
-                                    <p>Select a conversation to start chatting</p>
-                                </div>
-                            )}
+                        <div className={cn(
+                            "flex-col bg-[#0b101a] relative transition-all",
+                            selectedPhone ? "flex flex-1" : "hidden md:flex flex-1"
+                        )}>
+                            <ChatWindow 
+                                selectedPhone={selectedPhone}
+                                messages={(selectedPhone && chats.find(([p]) => p === selectedPhone)?.[1]) || []}
+                                onSendMessage={handleSimulatorSend}
+                                input={input}
+                                setInput={setInput}
+                                aiStatus={aiStatus}
+                                onBack={() => setSelectedPhone(null)}
+                                onAnalyze={classifyMessage}
+                            />
                         </div>
                     </TabsContent>
 
@@ -1046,7 +972,6 @@ const AIChatPage: React.FC = () => {
                                 </CardContent>
                             </Card>
                             
-                            {/* OpenAI Proxy Code Display */}
                              <Card className="border border-blue-500/30 bg-blue-900/10 text-white">
                                 <CardHeader>
                                     <CardTitle className="text-blue-300">Required: OpenAI Proxy Function</CardTitle>
@@ -1101,12 +1026,6 @@ const AIChatPage: React.FC = () => {
 
 function ChatIcon(props: React.SVGProps<SVGSVGElement>) {
     return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2v5Z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
-}
-function SendIcon(props: React.SVGProps<SVGSVGElement>) {
-    return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-}
-function CheckCircleIcon(props: React.SVGProps<SVGSVGElement>) {
-    return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
 }
 
 export default AIChatPage;

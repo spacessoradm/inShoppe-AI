@@ -14,8 +14,7 @@ const mockChatSessions: ChatSession[] = [
 ];
 
 const ConsoleLayout: React.FC = () => {
-  const { user, signOut, organization, isWhatsAppConnected } = useAuth();
-  const plan = organization?.plan;
+  const { user, signOut, organization, profile, isWhatsAppConnected } = useAuth();
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -28,139 +27,122 @@ const ConsoleLayout: React.FC = () => {
     }
   };
 
+  const orgName = organization?.name || "My Workspace";
+  const plan = organization?.plan || "Free";
+  const userName = profile?.full_name || user?.email?.split('@')[0] || "User";
+  const userInitial = userName.charAt(0).toUpperCase();
+
   return (
-    <div className="grid h-screen w-full md:grid-cols-[240px_1fr] lg:grid-cols-[280px_1fr] overflow-hidden bg-slate-950">
+    <div className="grid h-screen w-full md:grid-cols-[260px_1fr] overflow-hidden bg-slate-950">
       {/* Sidebar */}
-      <aside className="hidden flex-col border-r border-slate-800 bg-slate-900 md:flex">
-        {/* App Name */}
-        <div className="flex h-14 items-center border-b border-slate-800 px-4 lg:h-[60px] lg:px-6">
-          <Link to="/console" className="flex items-center gap-2 font-semibold text-white">
-            <MessageSquare className="h-6 w-6 text-primary" />
-            <span>inShoppe AI</span>
-          </Link>
+      <aside className="hidden flex-col border-r border-slate-800 bg-[#0b101a] md:flex">
+        
+        {/* Top: Organization Info */}
+        <div className="p-4 pb-2">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/50 border border-slate-800/50 hover:bg-slate-900 hover:border-slate-700 transition-all cursor-pointer group">
+                <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-lg shadow-blue-900/20 shrink-0">
+                    <BuildingIcon className="h-5 w-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-sm text-white truncate">{orgName}</h3>
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-slate-400 font-medium">{plan} Plan</span>
+                        {organization?.subscription_status === 'active' && <span className="h-1.5 w-1.5 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]"></span>}
+                    </div>
+                </div>
+                <ChevronRightIcon className="h-4 w-4 text-slate-600 group-hover:text-slate-400" />
+            </div>
         </div>
 
         {/* Navigation */}
-        <div className="flex-1 overflow-y-auto py-4">
-          <nav className="grid items-start px-2 text-sm font-medium gap-1 lg:px-4">
-            <NavLink 
-              to="/console/dashboard" 
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
-                isActive ? "bg-primary text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
-              )}
-            >
-              <HomeIcon className="h-4 w-4" />
-              Dashboard
-            </NavLink>
-             <NavLink 
-              to="/console/crm" 
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
-                isActive ? "bg-primary text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
-              )}
-            >
-              <BriefcaseIcon className="h-4 w-4" />
-              CRM & Leads
-            </NavLink>
-            <NavLink 
-              to="/console/chat" 
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
-                isActive ? "bg-primary text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
-              )}
-            >
-              <UsersIcon className="h-4 w-4" />
-              Chats
-            </NavLink>
-            <NavLink 
-              to="/console/ai-chat" 
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
-                isActive ? "bg-primary text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
-              )}
-            >
-              <BotIcon className="h-4 w-4" />
-              AI Chat
-            </NavLink>
-            <NavLink 
-              to="/console/settings" 
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
-                isActive ? "bg-primary text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
-              )}
-            >
-              <SettingsIcon className="h-4 w-4" />
-              Settings
-            </NavLink>
-          </nav>
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-800">
+          
+          {/* Main Group */}
+          <div className="space-y-1">
+            <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Platform</p>
+            <NavItem to="/console/dashboard" icon={HomeIcon} label="Dashboard" />
+            <NavItem to="/console/crm" icon={BriefcaseIcon} label="CRM & Leads" />
+            <NavItem to="/console/chat" icon={UsersIcon} label="Chats" />
+            <NavItem to="/console/ai-chat" icon={BotIcon} label="AI Agent" />
+          </div>
 
-          {/* Chat Sessions List */}
+          {/* Configuration Group */}
+          <div className="space-y-1">
+             <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Configuration</p>
+             <NavItem to="/console/settings" icon={SettingsIcon} label="Settings" />
+          </div>
+
+          {/* Active Chats (Conditional) */}
           {isWhatsAppConnected && (
-            <div className="mt-6">
-              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Active Sessions
-              </h3>
-              <nav className="grid gap-1 px-2">
-                {mockChatSessions.map((session) => (
+            <div className="space-y-1">
+              <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Recent Chats
+              </p>
+              {mockChatSessions.slice(0, 3).map((session) => (
                   <NavLink
                     key={session.id}
                     to={`/console/chat/${session.id}`}
                     className={({ isActive }) => cn(
-                      "flex items-center gap-3 rounded-lg px-3 py-3 transition-all",
-                      isActive ? "bg-slate-800/80 text-white shadow-sm ring-1 ring-slate-700" : "text-slate-400 hover:bg-slate-800/50 hover:text-white"
+                      "flex items-center gap-3 rounded-lg px-3 py-2 transition-all group",
+                      isActive ? "bg-slate-800 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800/50"
                     )}
                   >
-                    <div className="relative shrink-0">
-                        <img 
-                          src={session.avatarUrl} 
-                          alt={session.customerName} 
-                          className="w-9 h-9 rounded-full border border-slate-700 object-cover" 
-                        />
-                         {session.unreadCount > 0 && (
-                            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-[10px] font-bold text-white ring-2 ring-slate-900">
-                                {session.unreadCount}
-                            </span>
-                        )}
+                    <div className="relative">
+                        <img src={session.avatarUrl} alt="" className="w-6 h-6 rounded-full opacity-70 group-hover:opacity-100" />
+                        {session.unreadCount > 0 && <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full ring-2 ring-[#0b101a]"></div>}
                     </div>
-                    <div className="flex-1 min-w-0 overflow-hidden">
-                      <div className="flex justify-between items-baseline">
-                          <p className="font-medium truncate text-sm">{session.customerName}</p>
-                      </div>
-                      <p className="text-xs text-slate-500 truncate">{session.lastMessage}</p>
-                    </div>
+                    <span className="text-sm truncate">{session.customerName}</span>
                   </NavLink>
-                ))}
-              </nav>
+              ))}
             </div>
           )}
+        </div>
+
+        {/* Bottom: User Profile */}
+        <div className="p-4 border-t border-slate-800 bg-[#0b101a]">
+            <div className="flex items-center gap-3 p-2 rounded-xl transition-colors hover:bg-slate-900 group">
+                <div className="h-9 w-9 rounded-full bg-slate-800 flex items-center justify-center text-sm font-bold text-slate-300 border border-slate-700">
+                    {userInitial}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{userName}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
+                </div>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-red-400 hover:bg-slate-800" onClick={handleSignOut} title="Sign Out">
+                    <LogOutIcon className="h-4 w-4" />
+                </Button>
+            </div>
+            
+            {/* Profile Completion Bar */}
+            <div className="mt-3 px-1">
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] text-slate-500">Profile Setup</span>
+                    <span className="text-[10px] text-slate-400">70%</span>
+                </div>
+                <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-500 w-[70%] rounded-full shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
+                </div>
+            </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
       <div className="flex flex-col h-full overflow-hidden relative">
-        {/* Header */}
-        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-4 lg:h-[60px] lg:px-6 z-20">
-          <div className="flex-1">
-             {/* Breadcrumbs or spacer */}
-          </div>
-          <div className="flex items-center gap-4">
-            {plan && (
-              <Badge variant="outline" className="border-slate-700 text-slate-300">
-                {plan} Plan
-              </Badge>
-            )}
-            <div className="h-4 w-px bg-slate-700 mx-1"></div>
-            <span className="text-sm text-slate-400 font-medium">{user?.email}</span>
-            <Button 
-              onClick={handleSignOut} 
-              variant="ghost" 
-              size="sm" 
-              className="text-slate-400 hover:text-white hover:bg-slate-800"
-            >
-              Logout
-            </Button>
-          </div>
+        {/* Simplified Header */}
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md px-6 z-20 justify-between md:justify-end">
+           {/* Mobile Toggle Placeholder (Hidden on Desktop) */}
+           <div className="md:hidden flex items-center gap-2 font-bold text-white">
+              <MessageSquare className="h-6 w-6 text-primary" />
+              inShoppe AI
+           </div>
+
+           {/* Right side header items (e.g. notifications) */}
+           <div className="flex items-center gap-4">
+              <Button variant="ghost" size="icon" className="text-slate-400 hover:text-white">
+                  <BellIcon className="h-5 w-5" />
+                  <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full"></span>
+              </Button>
+           </div>
         </header>
 
         {/* Dynamic Background Area */}
@@ -180,7 +162,23 @@ const ConsoleLayout: React.FC = () => {
   );
 };
 
-// --- Icon Components ---
+// --- Helper Component ---
+const NavItem = ({ to, icon: Icon, label }: { to: string, icon: any, label: string }) => (
+    <NavLink 
+        to={to} 
+        className={({ isActive }) => cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 transition-all text-sm font-medium",
+        isActive 
+            ? "bg-slate-800 text-white shadow-sm ring-1 ring-slate-700/50" 
+            : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+        )}
+    >
+        <Icon className="h-4 w-4" />
+        {label}
+    </NavLink>
+);
+
+// --- Icons ---
 
 function MessageSquare(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -228,16 +226,6 @@ function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-function GlobeIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="2" x2="22" y1="12" y2="12" />
-      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z" />
-    </svg>
-  )
-}
-
 function BotIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -249,6 +237,51 @@ function BotIcon(props: React.SVGProps<SVGSVGElement>) {
       <path d="M9 13v2" />
     </svg>
   )
+}
+
+function BuildingIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect width="16" height="20" x="4" y="2" rx="2" ry="2" />
+            <path d="M9 22v-4h6v4" />
+            <path d="M8 6h.01" />
+            <path d="M16 6h.01" />
+            <path d="M12 6h.01" />
+            <path d="M12 10h.01" />
+            <path d="M12 14h.01" />
+            <path d="M16 10h.01" />
+            <path d="M16 14h.01" />
+            <path d="M8 10h.01" />
+            <path d="M8 14h.01" />
+        </svg>
+    )
+}
+
+function ChevronRightIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m9 18 6-6-6-6" />
+        </svg>
+    )
+}
+
+function LogOutIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" x2="9" y1="12" y2="12" />
+        </svg>
+    )
+}
+
+function BellIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+        </svg>
+    )
 }
 
 export default ConsoleLayout;
