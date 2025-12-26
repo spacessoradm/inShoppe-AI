@@ -155,13 +155,13 @@ serve(async (req) => {
       console.log('Scraping URL:', url);
       
       const controller = new AbortController();
-      // 50s server timeout
-      const timeoutId = setTimeout(() => controller.abort(), 50000); 
+      // 25s target timeout - fail fast if site is stuck so we can return error to UI
+      const timeoutId = setTimeout(() => controller.abort(), 25000); 
 
       try {
         const response = await fetch(url, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.google.com/',
@@ -174,9 +174,12 @@ serve(async (req) => {
         });
         clearTimeout(timeoutId);
 
-        if (!response.ok) throw new Error('Failed to fetch URL: ' + response.status);
+        if (!response.ok) {
+             // Return as text so UI can show it
+             return new Response(JSON.stringify({ text: "Error: Failed to fetch URL (" + response.status + "). Site might block bots." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
         
-        // STREAMING READ with Size Limit (Max 2MB) to prevent timeout on huge pages
+        // STREAMING READ with Size Limit (Max 2MB)
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let html = '';
@@ -195,40 +198,67 @@ serve(async (req) => {
               break;
             }
           }
-          html += decoder.decode(); // Flush
+          html += decoder.decode(); 
         } else {
           html = await response.text();
         }
         
-        // Use Cheerio for proper HTML parsing and cleaning
         const $ = cheerio.load(html);
         
-        // Aggressively remove non-content elements
-        $('script, style, noscript, iframe, svg, canvas, video, audio, link').remove();
+        // Remove junk
+        $('script, style, noscript, iframe, svg, canvas, video, audio, link, button, input, form').remove();
         $('header, footer, nav, aside, [role="banner"], [role="navigation"], [role="contentinfo"]').remove();
-        $('.menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal, .cookie-banner').remove();
+        $('.menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal, .cookie-banner, .social-share').remove();
         
-        // Attempt to find main content first
+        // Priority Extraction for Real Estate/Articles
         let text = '';
-        const mainContent = $('article, main, #content, .content, .main').first();
+        const selectors = [
+            'article', 
+            'main', 
+            '#content', 
+            '.content', 
+            '.property-description', 
+            '.listing-details', 
+            '.post-content',
+            '#main',
+            '.entry-content'
+        ];
         
-        if (mainContent.length > 0) {
-            text = mainContent.text();
-        } else {
+        // Try to find the best container
+        for (const sel of selectors) {
+            const el = $(sel);
+            if (el.length > 0 && el.text().trim().length > 200) {
+                text = el.text();
+                break;
+            }
+        }
+        
+        // Fallback to body if specific selectors fail
+        if (!text) {
             text = $('body').text();
         }
         
-        // Collapse whitespace
+        // Clean whitespace
         text = text.replace(new RegExp('[\\\\s\\\\n\\\\r]+', 'g'), ' ').trim();
         
-        // Limit result size (30k chars)
-        if (text.length > 30000) text = text.substring(0, 30000) + '... (Truncated)';
+        if (text.length > 25000) text = text.substring(0, 25000) + '... (Truncated)';
+        
+        if (!text || text.length < 50) {
+             text = "Error: Could not extract readable text. The site might be dynamic (React/Vue/SPA) and requires a headless browser.";
+        }
           
-        return new Response(JSON.stringify({ text: text || "No readable text found." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify({ text }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+
       } catch (fetchErr) {
         clearTimeout(timeoutId);
-        console.error("Scrape Error:", fetchErr);
-        throw fetchErr;
+        let errorMsg = "Error: Scraping failed.";
+        if (fetchErr.name === 'AbortError') {
+            errorMsg = "Error: Site took too long to respond (Timeout). Please copy text manually.";
+        } else {
+            errorMsg = "Error: " + fetchErr.message;
+        }
+        // Return 200 with error message in text so client doesn't throw
+        return new Response(JSON.stringify({ text: errorMsg }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       }
     }
 
@@ -335,7 +365,7 @@ const AIChatPage: React.FC = () => {
 
     const showNotification = (type: 'success'|'error'|'info', message: string) => {
         setNotification({ type, message });
-        setTimeout(() => setNotification(null), 4000);
+        setTimeout(() => setNotification(null), 5000); // 5s timeout
     };
 
     const fetchKnowledgeBase = async () => {
@@ -816,9 +846,9 @@ const AIChatPage: React.FC = () => {
         addLog(`System: Scraping content from ${urlInput}...`);
         
         try {
-            // Increased timeout to 70s for heavier sites or retries
+            // Increased client timeout to 90s to ensure we catch the server response (which now has a safe 25s timeout)
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (70s). Site might be slow, blocking bots, or too large.")), 70000)
+                setTimeout(() => reject(new Error("Request timed out (90s).")), 90000)
             );
 
             const requestPromise = supabase.functions.invoke('openai-proxy', {
@@ -828,24 +858,25 @@ const AIChatPage: React.FC = () => {
             const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;
 
             if (error) {
-                // Handle specific transport errors
                 console.error("Supabase Invoke Error:", error);
                 if (error.message && (error.message.includes('non-2xx') || error.message.includes('404'))) {
                     throw new Error("Function not found or crashed. Please re-deploy 'openai-proxy' function using the provided code.");
-                }
-                if (error.message && error.message.includes('Failed to fetch')) {
-                    throw new Error("Network error connecting to Supabase Edge Function. Check internet or CORS.");
                 }
                 throw error;
             }
             if (data?.error) throw new Error(data.error);
             
-            if (data?.text) {
+            // Check if returned text is actually an error message from our new handler
+            if (data?.text && data.text.startsWith('Error:')) {
+                 addLog(data.text);
+                 showNotification('error', data.text);
+                 setKnowledgeInput(data.text); // Still show it so user knows
+            } else if (data?.text) {
                 setKnowledgeInput(data.text);
                 addLog('System: Content scraped successfully.');
                 showNotification('success', 'Content scraped successfully!');
             } else {
-                addLog('Warning: No content extracted from URL. Site might require JS or login.');
+                addLog('Warning: No content extracted from URL.');
                 showNotification('error', 'No text found on page.');
             }
         } catch (e: any) {
