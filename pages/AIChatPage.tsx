@@ -13,6 +13,7 @@ import { processIncomingMessage } from '../services/aiEngine';
 // New Components
 import { ChatList } from '../components/ai-chat/ChatList';
 import { ChatWindow } from '../components/ai-chat/ChatWindow';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
 
 // Types
 interface SimMessage {
@@ -129,21 +130,49 @@ serve(async (req) => {
 
   try {
     const { action, apiKey, ...payload } = await req.json()
+    console.log('Action received:', action)
     
-    // 1. Resolve API Key
+    // 1. Resolve API Key (Only needed for AI actions)
     const finalApiKey = apiKey || Deno.env.get('OPENAI_API_KEY')
     
-    if (!finalApiKey) {
-      // Return 200 with error field so frontend can read the message instead of getting a generic 500
+    if (!finalApiKey && (action === 'chat' || action === 'embedding')) {
       return new Response(JSON.stringify({ error: 'Missing OPENAI_API_KEY. Set it in Supabase Secrets.' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200, 
       })
     }
 
+    // 2. Route Action
+    
+    // --- SCRAPE ACTION ---
+    if (action === 'scrape') {
+      const { url } = payload;
+      if (!url) throw new Error('URL is required for scrape action');
+      console.log('Scraping URL:', url);
+      
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+      });
+      if (!response.ok) throw new Error('Failed to fetch URL: ' + response.status + ' ' + response.statusText);
+      
+      const html = await response.text();
+      
+      // Basic HTML to Text stripping using RegExp constructor to avoid bundling issues
+      const text = html
+        .replace(new RegExp('<script[^>]*>([\\\\s\\\\S]*?)</script>', 'gi'), '')
+        .replace(new RegExp('<style[^>]*>([\\\\s\\\\S]*?)</style>', 'gi'), '')
+        .replace(new RegExp('<[^>]+>', 'g'), ' ')
+        .replace(new RegExp('\\\\s+', 'g'), ' ')
+        .trim();
+        
+      return new Response(JSON.stringify({ text: text }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    // --- AI ACTIONS ---
     const openai = new OpenAI({ apiKey: finalApiKey })
 
-    // 2. Route Action
     if (action === 'chat') {
       const completion = await openai.chat.completions.create(payload)
       return new Response(JSON.stringify(completion), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
@@ -157,10 +186,10 @@ serve(async (req) => {
     throw new Error('Invalid action: ' + action)
 
   } catch (error) {
-    // Return error as JSON so frontend can display it
+    console.error('Edge Function Error:', error);
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200, // Return 200 to bypass generic Supabase error handlers
+      status: 200,
     })
   }
 })
@@ -197,7 +226,9 @@ const AIChatPage: React.FC = () => {
 
     // --- State: Knowledge Base ---
     const [knowledgeInput, setKnowledgeInput] = useState('');
+    const [urlInput, setUrlInput] = useState('');
     const [isEmbedding, setIsEmbedding] = useState(false);
+    const [isScraping, setIsScraping] = useState(false);
     const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
     
     // --- State: Data ---
@@ -671,14 +702,81 @@ const AIChatPage: React.FC = () => {
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                const text = e.target?.result;
-                if (typeof text === 'string') {
-                    setKnowledgeInput(text);
+            
+            if (file.type === 'application/pdf') {
+                try {
+                    // Set worker source
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+                    
+                    const arrayBuffer = await file.arrayBuffer();
+                    // @ts-ignore
+                    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                    let fullText = '';
+                    
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        // @ts-ignore
+                        const pageText = textContent.items.map((item: any) => item.str).join(' ');
+                        fullText += pageText + '\n';
+                    }
+                    setKnowledgeInput(fullText);
+                    addLog(`System: PDF extracted (${pdf.numPages} pages).`);
+                } catch (err) {
+                    console.error("PDF Parse Error:", err);
+                    addLog("Error: Failed to parse PDF file. Ensure it is a valid PDF.");
                 }
-            };
-            reader.readAsText(file);
+            } else {
+                // Fallback for text-based files
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const text = e.target?.result;
+                    if (typeof text === 'string') {
+                        setKnowledgeInput(text);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        }
+    };
+
+    const handleScrape = async () => {
+        if (!urlInput || !supabase) return;
+        setIsScraping(true);
+        addLog(`System: Scraping content from ${urlInput}...`);
+        
+        try {
+            // Safety timeout race
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Request timed out (15s)")), 15000)
+            );
+
+            const requestPromise = supabase.functions.invoke('openai-proxy', {
+                body: { action: 'scrape', url: urlInput }
+            });
+
+            const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;
+
+            if (error) {
+                // Handle specific transport errors
+                if (error.message && error.message.includes('non-2xx')) {
+                    throw new Error("Function not found or crashed. Please re-deploy 'openai-proxy' function.");
+                }
+                throw error;
+            }
+            if (data?.error) throw new Error(data.error);
+            
+            if (data?.text) {
+                setKnowledgeInput(data.text);
+                addLog('System: Content scraped successfully.');
+            } else {
+                addLog('Warning: No content extracted from URL.');
+            }
+        } catch (e: any) {
+            console.error("Scrape Error:", e);
+            addLog(`Error: Scraping failed - ${e.message}`);
+        } finally {
+            setIsScraping(false);
         }
     };
 
@@ -927,23 +1025,67 @@ const AIChatPage: React.FC = () => {
                             <div className="flex justify-between items-center">
                                 <div>
                                     <h2 className="text-xl font-bold text-white">Knowledge Base</h2>
-                                    <p className="text-sm text-slate-400">Upload documents (PDF/Word/Text) to train your AI agent.</p>
-                                </div>
-                                <div className="flex gap-2">
-                                     <Input type="file" className="hidden" ref={fileInputRef} onChange={handleFileUpload} accept=".txt,.md,.csv,.json,.pdf,.docx" />
-                                    <Button variant="outline" onClick={() => fileInputRef.current?.click()}>Upload File</Button>
+                                    <p className="text-sm text-slate-400">Add documents or website content to train your AI agent.</p>
                                 </div>
                             </div>
+                            
                             <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
                                 <CardHeader><CardTitle className="text-sm">Add New Knowledge</CardTitle></CardHeader>
                                 <CardContent className="space-y-4">
-                                    <textarea value={knowledgeInput} onChange={(e) => setKnowledgeInput(e.target.value)} className="w-full h-32 bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm focus:ring-1 focus:ring-blue-500" placeholder="Paste text here or upload a file..." />
-                                    <div className="flex justify-between items-center">
-                                        <p className="text-xs text-slate-500">Note: Content is converted to vectors using OpenAI Embeddings via Proxy.</p>
-                                        <Button onClick={addKnowledge} disabled={isEmbedding || !knowledgeInput.trim()} className="bg-blue-600 hover:bg-blue-500">{isEmbedding ? 'Vectorizing...' : 'Add to Knowledge Base'}</Button>
+                                    {/* Import Sources Row */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+                                        <div className="flex gap-2 items-center">
+                                            <Input 
+                                                placeholder="https://example.com/property" 
+                                                value={urlInput} 
+                                                onChange={(e) => setUrlInput(e.target.value)} 
+                                                className="bg-slate-950 border-slate-700 h-10" 
+                                            />
+                                            <Button 
+                                                variant="outline" 
+                                                onClick={handleScrape} 
+                                                disabled={isScraping || !urlInput}
+                                                className="border-slate-700 hover:bg-slate-800"
+                                            >
+                                                {isScraping ? 'Scraping...' : 'Import URL'}
+                                            </Button>
+                                        </div>
+                                        <div className="flex justify-end gap-2 items-center">
+                                            <span className="text-xs text-slate-500">or upload file:</span>
+                                            <Input 
+                                                type="file" 
+                                                className="hidden" 
+                                                ref={fileInputRef} 
+                                                onChange={handleFileUpload} 
+                                                accept=".txt,.md,.csv,.json,.pdf,.docx" 
+                                            />
+                                            <Button 
+                                                variant="outline" 
+                                                onClick={() => fileInputRef.current?.click()}
+                                                className="border-slate-700 hover:bg-slate-800"
+                                            >
+                                                Upload File (PDF/Text)
+                                            </Button>
+                                        </div>
+                                    </div>
+
+                                    {/* Content Editor */}
+                                    <textarea 
+                                        value={knowledgeInput} 
+                                        onChange={(e) => setKnowledgeInput(e.target.value)} 
+                                        className="w-full h-48 bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm focus:ring-1 focus:ring-blue-500 font-mono leading-relaxed" 
+                                        placeholder="Content from files or URLs will appear here for review before saving..." 
+                                    />
+                                    
+                                    <div className="flex justify-between items-center pt-2">
+                                        <p className="text-xs text-slate-500">Content is converted to vectors using OpenAI Embeddings.</p>
+                                        <Button onClick={addKnowledge} disabled={isEmbedding || !knowledgeInput.trim()} className="bg-blue-600 hover:bg-blue-500 px-6">
+                                            {isEmbedding ? 'Vectorizing...' : 'Save to Knowledge Base'}
+                                        </Button>
                                     </div>
                                 </CardContent>
                             </Card>
+
                             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                                 {knowledgeItems.map((item) => (
                                     <Card key={item.id} className="border border-slate-800 bg-slate-900/20">
