@@ -155,14 +155,17 @@ serve(async (req) => {
       console.log('Scraping URL:', url);
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for the fetch itself
+      // Increased timeout to 50s for slower sites or cold starts
+      const timeoutId = setTimeout(() => controller.abort(), 50000); 
 
       try {
         const response = await fetch(url, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.google.com/',
+            'Upgrade-Insecure-Requests': '1'
           },
           signal: controller.signal
         });
@@ -175,34 +178,25 @@ serve(async (req) => {
         // Use Cheerio for proper HTML parsing and cleaning
         const $ = cheerio.load(html);
         
-        // Remove clutter and non-content elements
-        $('script').remove();
-        $('style').remove();
-        $('noscript').remove();
-        $('iframe').remove();
-        $('svg').remove();
-        $('header').remove();
-        $('footer').remove();
-        $('nav').remove();
-        $('aside').remove();
-        $('[role="banner"]').remove();
-        $('[role="navigation"]').remove();
-        $('.hidden').remove();
-        $('.ads').remove();
-        $('.advertisement').remove();
+        // Aggressively remove non-content elements
+        $('script, style, noscript, iframe, svg, canvas, video, audio').remove();
+        $('header, footer, nav, aside, [role="banner"], [role="navigation"], [role="contentinfo"]').remove();
+        $('.header, .footer, .menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal').remove();
         
         // Extract text from body
         let text = $('body').text();
         
-        // Collapse whitespace using RegExp constructor to avoid literal issues in bundle
+        // Collapse whitespace (replace multiple spaces/newlines with single space)
+        // Using RegExp constructor to avoid edge case issues with raw strings in deployments
         text = text.replace(new RegExp('[\\\\s\\\\n\\\\r]+', 'g'), ' ').trim();
         
-        // Limit size to avoid huge payloads (25k chars)
-        if (text.length > 25000) text = text.substring(0, 25000) + '...';
+        // Limit size to avoid huge payloads (30k chars)
+        if (text.length > 30000) text = text.substring(0, 30000) + '...';
           
         return new Response(JSON.stringify({ text: text || "No readable text found." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       } catch (fetchErr) {
         clearTimeout(timeoutId);
+        console.error("Scrape Fetch Error:", fetchErr);
         throw fetchErr;
       }
     }
@@ -783,9 +777,9 @@ const AIChatPage: React.FC = () => {
         addLog(`System: Scraping content from ${urlInput}...`);
         
         try {
-            // Increased timeout to 45s for heavier sites
+            // Increased timeout to 60s for heavier sites or retries
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (45s). Site might be slow or blocking bots.")), 45000)
+                setTimeout(() => reject(new Error("Request timed out (60s). Site might be slow, blocking bots, or too large.")), 60000)
             );
 
             const requestPromise = supabase.functions.invoke('openai-proxy', {
@@ -811,7 +805,7 @@ const AIChatPage: React.FC = () => {
                 setKnowledgeInput(data.text);
                 addLog('System: Content scraped successfully.');
             } else {
-                addLog('Warning: No content extracted from URL.');
+                addLog('Warning: No content extracted from URL. Site might require JS or login.');
             }
         } catch (e: any) {
             console.error("Scrape Error:", e);
