@@ -151,52 +151,83 @@ serve(async (req) => {
     // --- SCRAPE ACTION ---
     if (action === 'scrape') {
       const { url } = payload;
-      if (!url) throw new Error('URL is required for scrape action');
+      if (!url) throw new Error('URL is required');
       console.log('Scraping URL:', url);
       
       const controller = new AbortController();
-      // Increased timeout to 50s for slower sites or cold starts
+      // 50s server timeout
       const timeoutId = setTimeout(() => controller.abort(), 50000); 
 
       try {
         const response = await fetch(url, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.google.com/',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'cross-site',
             'Upgrade-Insecure-Requests': '1'
           },
           signal: controller.signal
         });
         clearTimeout(timeoutId);
 
-        if (!response.ok) throw new Error('Failed to fetch URL: ' + response.status + ' ' + response.statusText);
+        if (!response.ok) throw new Error('Failed to fetch URL: ' + response.status);
         
-        const html = await response.text();
+        // STREAMING READ with Size Limit (Max 2MB) to prevent timeout on huge pages
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let html = '';
+        let receivedLength = 0;
+        const MAX_SIZE = 2 * 1024 * 1024; // 2MB limit
+
+        if (reader) {
+          while(true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            receivedLength += value.length;
+            html += decoder.decode(value, {stream: true});
+            if (receivedLength > MAX_SIZE) {
+              console.log('Scraper: Size limit exceeded, truncating download.');
+              reader.cancel();
+              break;
+            }
+          }
+          html += decoder.decode(); // Flush
+        } else {
+          html = await response.text();
+        }
         
         // Use Cheerio for proper HTML parsing and cleaning
         const $ = cheerio.load(html);
         
         // Aggressively remove non-content elements
-        $('script, style, noscript, iframe, svg, canvas, video, audio').remove();
+        $('script, style, noscript, iframe, svg, canvas, video, audio, link').remove();
         $('header, footer, nav, aside, [role="banner"], [role="navigation"], [role="contentinfo"]').remove();
-        $('.header, .footer, .menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal').remove();
+        $('.menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal, .cookie-banner').remove();
         
-        // Extract text from body
-        let text = $('body').text();
+        // Attempt to find main content first
+        let text = '';
+        const mainContent = $('article, main, #content, .content, .main').first();
         
-        // Collapse whitespace (replace multiple spaces/newlines with single space)
-        // Using RegExp constructor to avoid edge case issues with raw strings in deployments
+        if (mainContent.length > 0) {
+            text = mainContent.text();
+        } else {
+            text = $('body').text();
+        }
+        
+        // Collapse whitespace
         text = text.replace(new RegExp('[\\\\s\\\\n\\\\r]+', 'g'), ' ').trim();
         
-        // Limit size to avoid huge payloads (30k chars)
-        if (text.length > 30000) text = text.substring(0, 30000) + '...';
+        // Limit result size (30k chars)
+        if (text.length > 30000) text = text.substring(0, 30000) + '... (Truncated)';
           
         return new Response(JSON.stringify({ text: text || "No readable text found." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       } catch (fetchErr) {
         clearTimeout(timeoutId);
-        console.error("Scrape Fetch Error:", fetchErr);
+        console.error("Scrape Error:", fetchErr);
         throw fetchErr;
       }
     }
@@ -235,6 +266,7 @@ const AIChatPage: React.FC = () => {
     const [isHistoryLoading, setIsHistoryLoading] = useState(false);
     const [aiStatus, setAiStatus] = useState<string>('');
     const [searchQuery, setSearchQuery] = useState('');
+    const [notification, setNotification] = useState<{type: 'success'|'error'|'info', message: string} | null>(null);
     
     // --- State: Configuration ---
     const [loading, setLoading] = useState(false);
@@ -299,6 +331,11 @@ const AIChatPage: React.FC = () => {
     const addLog = (text: string) => {
         const time = new Date().toLocaleTimeString();
         setLogs(prev => [`[${time}] ${text}`, ...prev.slice(0, 49)]);
+    };
+
+    const showNotification = (type: 'success'|'error'|'info', message: string) => {
+        setNotification({ type, message });
+        setTimeout(() => setNotification(null), 4000);
     };
 
     const fetchKnowledgeBase = async () => {
@@ -774,12 +811,14 @@ const AIChatPage: React.FC = () => {
     const handleScrape = async () => {
         if (!urlInput || !supabase) return;
         setIsScraping(true);
+        const domain = new URL(urlInput).hostname;
+        showNotification('info', `Scraping content from ${domain}...`);
         addLog(`System: Scraping content from ${urlInput}...`);
         
         try {
-            // Increased timeout to 60s for heavier sites or retries
+            // Increased timeout to 70s for heavier sites or retries
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (60s). Site might be slow, blocking bots, or too large.")), 60000)
+                setTimeout(() => reject(new Error("Request timed out (70s). Site might be slow, blocking bots, or too large.")), 70000)
             );
 
             const requestPromise = supabase.functions.invoke('openai-proxy', {
@@ -804,12 +843,15 @@ const AIChatPage: React.FC = () => {
             if (data?.text) {
                 setKnowledgeInput(data.text);
                 addLog('System: Content scraped successfully.');
+                showNotification('success', 'Content scraped successfully!');
             } else {
                 addLog('Warning: No content extracted from URL. Site might require JS or login.');
+                showNotification('error', 'No text found on page.');
             }
         } catch (e: any) {
             console.error("Scrape Error:", e);
             addLog(`Error: Scraping failed - ${e.message}`);
+            showNotification('error', `Scraping failed: ${e.message}`);
         } finally {
             setIsScraping(false);
         }
@@ -845,11 +887,13 @@ const AIChatPage: React.FC = () => {
                 
                 setKnowledgeInput('');
                 addLog('System: Knowledge added successfully.');
+                showNotification('success', 'Knowledge saved to database.');
                 fetchKnowledgeBase();
             }
         } catch (e: any) {
             console.error("Add Knowledge Error:", e);
             addLog(`Error: ${e.message}`);
+            showNotification('error', 'Failed to save knowledge.');
         } finally {
             setIsEmbedding(false);
         }
@@ -972,7 +1016,22 @@ const AIChatPage: React.FC = () => {
     }
 
     return (
-        <div className="h-full flex flex-col overflow-hidden bg-slate-950">
+        <div className="h-full flex flex-col overflow-hidden bg-slate-950 relative">
+            {/* Toast Notification */}
+            {notification && (
+                <div className={cn(
+                    "fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-sm font-medium animate-fadeInUp flex items-center gap-2",
+                    notification.type === 'success' ? "bg-green-900/90 border-green-700 text-white" :
+                    notification.type === 'error' ? "bg-red-900/90 border-red-700 text-white" :
+                    "bg-blue-900/90 border-blue-700 text-white"
+                )}>
+                    {notification.type === 'success' && <CheckIcon className="w-4 h-4" />}
+                    {notification.type === 'error' && <AlertCircleIcon className="w-4 h-4" />}
+                    {notification.type === 'info' && <InfoIcon className="w-4 h-4" />}
+                    {notification.message}
+                </div>
+            )}
+
             <header className="border-b border-slate-800 bg-slate-900/50 p-4 flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-3">
                     <div className="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></div>
@@ -1203,6 +1262,34 @@ const AIChatPage: React.FC = () => {
 
 function ChatIcon(props: React.SVGProps<SVGSVGElement>) {
     return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2v5Z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
+}
+
+function CheckIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+        </svg>
+    )
+}
+
+function AlertCircleIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" x2="12" y1="8" y2="12" />
+            <line x1="12" x2="12.01" y1="16" y2="16" />
+        </svg>
+    )
+}
+
+function InfoIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" x2="12" y1="16" y2="12" />
+            <line x1="12" x2="12.01" y1="8" y2="8" />
+        </svg>
+    )
 }
 
 export default AIChatPage;
