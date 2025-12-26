@@ -129,7 +129,11 @@ serve(async (req) => {
   }
 
   try {
-    const { action, apiKey, ...payload } = await req.json()
+    // Basic body parsing check
+    const bodyText = await req.text();
+    if (!bodyText) throw new Error("Empty request body");
+    
+    const { action, apiKey, ...payload } = JSON.parse(bodyText);
     console.log('Action received:', action)
     
     // 1. Resolve API Key (Only needed for AI actions)
@@ -150,24 +154,38 @@ serve(async (req) => {
       if (!url) throw new Error('URL is required for scrape action');
       console.log('Scraping URL:', url);
       
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-      });
-      if (!response.ok) throw new Error('Failed to fetch URL: ' + response.status + ' ' + response.statusText);
-      
-      const html = await response.text();
-      
-      // Basic HTML to Text stripping using RegExp constructor to avoid bundling issues
-      const text = html
-        .replace(new RegExp('<script[^>]*>([\\\\s\\\\S]*?)</script>', 'gi'), '')
-        .replace(new RegExp('<style[^>]*>([\\\\s\\\\S]*?)</style>', 'gi'), '')
-        .replace(new RegExp('<[^>]+>', 'g'), ' ')
-        .replace(new RegExp('\\\\s+', 'g'), ' ')
-        .trim();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for the fetch itself
+
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5'
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) throw new Error('Failed to fetch URL: ' + response.status + ' ' + response.statusText);
         
-      return new Response(JSON.stringify({ text: text }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        const html = await response.text();
+        
+        // Basic HTML to Text stripping using RegExp constructor to avoid bundling issues
+        // Note: For SPAs (React/Vue sites), this might return empty text if content is JS-rendered.
+        const text = html
+          .replace(new RegExp('<script[^>]*>([\\\\s\\\\S]*?)</script>', 'gi'), '')
+          .replace(new RegExp('<style[^>]*>([\\\\s\\\\S]*?)</style>', 'gi'), '')
+          .replace(new RegExp('<[^>]+>', 'g'), ' ')
+          .replace(new RegExp('\\\\s+', 'g'), ' ')
+          .trim();
+          
+        return new Response(JSON.stringify({ text: text || "No readable text found (Site might be SPA/JavaScript only)." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        throw fetchErr;
+      }
     }
 
     // --- AI ACTIONS ---
@@ -746,9 +764,9 @@ const AIChatPage: React.FC = () => {
         addLog(`System: Scraping content from ${urlInput}...`);
         
         try {
-            // Safety timeout race
+            // Increased timeout to 45s for heavier sites
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (15s)")), 15000)
+                setTimeout(() => reject(new Error("Request timed out (45s). Site might be slow or blocking bots.")), 45000)
             );
 
             const requestPromise = supabase.functions.invoke('openai-proxy', {
@@ -759,8 +777,12 @@ const AIChatPage: React.FC = () => {
 
             if (error) {
                 // Handle specific transport errors
-                if (error.message && error.message.includes('non-2xx')) {
-                    throw new Error("Function not found or crashed. Please re-deploy 'openai-proxy' function.");
+                console.error("Supabase Invoke Error:", error);
+                if (error.message && (error.message.includes('non-2xx') || error.message.includes('404'))) {
+                    throw new Error("Function not found or crashed. Please re-deploy 'openai-proxy' function using the provided code.");
+                }
+                if (error.message && error.message.includes('Failed to fetch')) {
+                    throw new Error("Network error connecting to Supabase Edge Function. Check internet or CORS.");
                 }
                 throw error;
             }
