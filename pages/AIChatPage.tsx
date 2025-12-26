@@ -116,6 +116,7 @@ serve(async (req) => {
 const OPENAI_PROXY_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import OpenAI from 'https://esm.sh/openai@4.28.0'
+import * as cheerio from 'https://esm.sh/cheerio@1.0.0-rc.12'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -129,7 +130,6 @@ serve(async (req) => {
   }
 
   try {
-    // Basic body parsing check
     const bodyText = await req.text();
     if (!bodyText) throw new Error("Empty request body");
     
@@ -172,16 +172,35 @@ serve(async (req) => {
         
         const html = await response.text();
         
-        // Basic HTML to Text stripping using RegExp constructor to avoid bundling issues
-        // Note: For SPAs (React/Vue sites), this might return empty text if content is JS-rendered.
-        const text = html
-          .replace(new RegExp('<script[^>]*>([\\\\s\\\\S]*?)</script>', 'gi'), '')
-          .replace(new RegExp('<style[^>]*>([\\\\s\\\\S]*?)</style>', 'gi'), '')
-          .replace(new RegExp('<[^>]+>', 'g'), ' ')
-          .replace(new RegExp('\\\\s+', 'g'), ' ')
-          .trim();
+        // Use Cheerio for proper HTML parsing and cleaning
+        const $ = cheerio.load(html);
+        
+        // Remove clutter and non-content elements
+        $('script').remove();
+        $('style').remove();
+        $('noscript').remove();
+        $('iframe').remove();
+        $('svg').remove();
+        $('header').remove();
+        $('footer').remove();
+        $('nav').remove();
+        $('aside').remove();
+        $('[role="banner"]').remove();
+        $('[role="navigation"]').remove();
+        $('.hidden').remove();
+        $('.ads').remove();
+        $('.advertisement').remove();
+        
+        // Extract text from body
+        let text = $('body').text();
+        
+        // Collapse whitespace using RegExp constructor to avoid literal issues in bundle
+        text = text.replace(new RegExp('[\\\\s\\\\n\\\\r]+', 'g'), ' ').trim();
+        
+        // Limit size to avoid huge payloads (25k chars)
+        if (text.length > 25000) text = text.substring(0, 25000) + '...';
           
-        return new Response(JSON.stringify({ text: text || "No readable text found (Site might be SPA/JavaScript only)." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify({ text: text || "No readable text found." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       } catch (fetchErr) {
         clearTimeout(timeoutId);
         throw fetchErr;
