@@ -644,48 +644,58 @@ const AIChatPage: React.FC = () => {
 
     const handleScrape = async () => {
         if (!urlInput || !supabase) return;
+
         setIsScraping(true);
         const domain = new URL(urlInput).hostname;
+
         showNotification('info', `Scraping content from ${domain}...`);
         addLog(`System: Scraping content from ${urlInput}...`);
-        
+
         try {
-            // Increased client timeout to 90s
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (90s).")), 90000)
+            const { data, error } = await supabase.functions.invoke(
+            'openai-proxy',
+            {
+                body: {
+                action: 'scrape',
+                url: urlInput,
+                },
+            }
             );
 
-            const requestPromise = supabase.functions.invoke('openai-proxy', {
-                body: { action: 'scrape', url: urlInput }
-            });
-
-            const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;
-
+            // Network / function error
             if (error) {
-                console.error("Supabase Invoke Error:", error);
-                if (error.message && (error.message.includes('non-2xx') || error.message.includes('404'))) {
-                    throw new Error("Function not found. Please re-deploy 'openai-proxy'.");
-                }
-                throw error;
+            console.error('Supabase invoke error:', error);
+            throw new Error(error.message || 'Edge function error');
             }
-            if (data?.error) throw new Error(data.error);
-            
-            if (data?.text && data.text.startsWith('Error:')) {
-                 addLog(data.text);
-                 showNotification('error', data.text);
-                 setKnowledgeInput(data.text); 
-            } else if (data?.text) {
-                setKnowledgeInput(data.text);
-                addLog('System: Content scraped successfully.');
-                showNotification('success', 'Content scraped successfully!');
-            } else {
-                addLog('Warning: No content extracted from URL.');
-                showNotification('error', 'No text found on page.');
+
+            // Edge returned error
+            if (data?.error) {
+            throw new Error(data.error);
             }
-        } catch (e: any) {
-            console.error("Scrape Error:", e);
-            addLog(`Error: Scraping failed - ${e.message}`);
-            showNotification('error', `Scraping failed: ${e.message}`);
+
+            // Scraper returned readable error text
+            if (data?.text?.startsWith('Error:')) {
+            addLog(data.text);
+            showNotification('error', data.text);
+            setKnowledgeInput(data.text);
+            return;
+            }
+
+            // Success
+            if (data?.text) {
+            setKnowledgeInput(data.text);
+            addLog('System: Content scraped successfully.');
+            showNotification('success', 'Content scraped successfully!');
+            return;
+            }
+
+            // Nothing returned
+            throw new Error('No text returned from scraper');
+
+        } catch (err: any) {
+            console.error('Scrape Error:', err);
+            addLog(`Error: Scraping failed - ${err.message}`);
+            showNotification('error', `Scraping failed: ${err.message}`);
         } finally {
             setIsScraping(false);
         }
