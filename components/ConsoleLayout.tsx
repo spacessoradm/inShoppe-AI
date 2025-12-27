@@ -4,14 +4,7 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { ChatSession } from '../types';
 import { cn } from '../lib/utils';
-
-const mockChatSessions: ChatSession[] = [
-  { id: '1', customerName: 'John Doe', lastMessage: 'Okay, thank you!', avatarUrl: 'https://i.pravatar.cc/150?u=a042581f4e29026704d', unreadCount: 2, phone: '+1-202-555-0104', priority: 'Hot' },
-  { id: '2', customerName: 'Jane Smith', lastMessage: 'I have a question about pricing.', avatarUrl: 'https://i.pravatar.cc/150?u=a042581f4e29026705d', unreadCount: 0, phone: '+1-202-555-0176', priority: 'Warm' },
-  { id: '3', customerName: 'Sam Wilson', lastMessage: 'Can you call me back?', avatarUrl: 'https://i.pravatar.cc/150?u=a042581f4e29026706d', unreadCount: 0, phone: '+1-202-555-0182', priority: 'Cold' },
-];
 
 const ConsoleLayout: React.FC = () => {
   const { user, signOut, organization, profile, isWhatsAppConnected } = useAuth();
@@ -70,31 +63,6 @@ const ConsoleLayout: React.FC = () => {
              <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Configuration</p>
              <NavItem to="/console/settings" icon={SettingsIcon} label="Settings" />
           </div>
-
-          {/* Active Chats (Conditional) */}
-          {isWhatsAppConnected && (
-            <div className="space-y-1">
-              <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                Recent Chats
-              </p>
-              {mockChatSessions.slice(0, 3).map((session) => (
-                  <NavLink
-                    key={session.id}
-                    to={`/console/chat/${session.id}`}
-                    className={({ isActive }) => cn(
-                      "flex items-center gap-3 rounded-lg px-3 py-2 transition-all group",
-                      isActive ? "bg-slate-800 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-                    )}
-                  >
-                    <div className="relative">
-                        <img src={session.avatarUrl} alt="" className="w-6 h-6 rounded-full opacity-70 group-hover:opacity-100" />
-                        {session.unreadCount > 0 && <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full ring-2 ring-[#0b101a]"></div>}
-                    </div>
-                    <span className="text-sm truncate">{session.customerName}</span>
-                  </NavLink>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Bottom: User Profile */}

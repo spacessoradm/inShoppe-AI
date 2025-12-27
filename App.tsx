@@ -4,7 +4,6 @@ import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-d
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LandingPage from './pages/LandingPage';
 import AuthPage from './pages/AuthPage';
-import ChatConsolePage from './pages/ChatConsolePage';
 import ConsoleLayout from './components/ConsoleLayout';
 import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
@@ -71,8 +70,6 @@ const AppRoutes: React.FC = () => {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="crm" element={<CRMPage />} />
-        <Route path="chat" element={<ChatConsolePage />} />
-        <Route path="chat/:chatId" element={<ChatConsolePage />} />
         <Route path="ai-chat" element={<AIChatPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
