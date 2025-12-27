@@ -1,0 +1,65 @@
+
+import React from 'react';
+import { cn } from '../../lib/utils';
+import { ChatList } from './ChatList';
+import { ChatWindow } from './ChatWindow';
+
+interface SimulatorTabProps {
+    chats: [string, any[]][];
+    selectedPhone: string | null;
+    setSelectedPhone: (phone: string | null) => void;
+    searchQuery: string;
+    setSearchQuery: (query: string) => void;
+    messages: any[];
+    input: string;
+    setInput: (val: string) => void;
+    aiStatus: string;
+    handleSimulatorSend: (text: string) => void;
+    classifyMessage: (msgId: string, text: string) => void;
+}
+
+export const SimulatorTab: React.FC<SimulatorTabProps> = ({
+    chats,
+    selectedPhone,
+    setSelectedPhone,
+    searchQuery,
+    setSearchQuery,
+    messages,
+    input,
+    setInput,
+    aiStatus,
+    handleSimulatorSend,
+    classifyMessage
+}) => {
+    return (
+        <div className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-[#0b101a] h-full">
+            <div className={cn(
+                "flex-col border-r border-slate-800 bg-slate-900/30 transition-all",
+                selectedPhone ? "hidden md:flex w-[320px]" : "flex w-full md:w-[320px]"
+            )}>
+                <ChatList 
+                    chats={chats} 
+                    selectedPhone={selectedPhone} 
+                    onSelect={setSelectedPhone}
+                    searchQuery={searchQuery}
+                    onSearchChange={setSearchQuery}
+                />
+            </div>
+            <div className={cn(
+                "flex-col bg-[#0b101a] relative transition-all",
+                selectedPhone ? "flex flex-1" : "hidden md:flex flex-1"
+            )}>
+                <ChatWindow 
+                    selectedPhone={selectedPhone}
+                    messages={messages}
+                    onSendMessage={handleSimulatorSend}
+                    input={input}
+                    setInput={setInput}
+                    aiStatus={aiStatus}
+                    onBack={() => setSelectedPhone(null)}
+                    onAnalyze={classifyMessage}
+                />
+            </div>
+        </div>
+    );
+};

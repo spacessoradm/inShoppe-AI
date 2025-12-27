@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/Card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -10,10 +10,13 @@ import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { processIncomingMessage } from '../services/aiEngine';
-// New Components
-import { ChatList } from '../components/ai-chat/ChatList';
-import { ChatWindow } from '../components/ai-chat/ChatWindow';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+
+// Modular Tab Components
+import { SimulatorTab } from '../components/ai-chat/SimulatorTab';
+import { KnowledgeBaseTab } from '../components/ai-chat/KnowledgeBaseTab';
+import { ConnectionStatusTab } from '../components/ai-chat/ConnectionStatusTab';
+import { SystemLogsTab } from '../components/ai-chat/SystemLogsTab';
 
 // Types
 interface SimMessage {
@@ -53,239 +56,6 @@ const getEnv = (key: string) => {
     }
     return val;
 };
-
-// --- EDGE FUNCTION CODE SNIPPET (TWILIO WEBHOOK) ---
-const EDGE_FUNCTION_CODE = `
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-
-const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } })
-  }
-
-  try {
-    const formData = await req.formData()
-    const incomingMsg = formData.get('Body')?.toString() || ''
-    
-    let senderPhone = formData.get('From')?.toString() || ''
-    let merchantPhone = formData.get('To')?.toString() || ''
-
-    senderPhone = senderPhone.replace('whatsapp:', '')
-    merchantPhone = merchantPhone.replace('whatsapp:', '')
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('twilio_phone_number', merchantPhone)
-      .single()
-
-    if (!profile) return new Response('Profile not found', { status: 404 })
-
-    const { error: insertError } = await supabase
-      .from('messages')
-      .insert({
-        user_id: profile.id, 
-        text: incomingMsg,
-        sender: 'user',
-        direction: 'inbound',
-        phone: senderPhone,
-        intent_tag: 'Processing...'
-      })
-
-    return new Response(
-      '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-      { headers: { "Content-Type": "text/xml" } }
-    )
-
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      headers: { "Content-Type": "application/json" },
-      status: 400,
-    })
-  }
-})
-`;
-
-// --- OPENAI PROXY CODE SNIPPET (ROBUST VERSION) ---
-const OPENAI_PROXY_CODE = `
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import OpenAI from 'https://esm.sh/openai@4.28.0'
-import * as cheerio from 'https://esm.sh/cheerio@1.0.0-rc.12'
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-serve(async (req) => {
-  // Handle CORS
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
-
-  try {
-    const bodyText = await req.text();
-    if (!bodyText) throw new Error("Empty request body");
-    
-    const { action, apiKey, ...payload } = JSON.parse(bodyText);
-    console.log('Action received:', action)
-    
-    // 1. Resolve API Key (Only needed for AI actions)
-    const finalApiKey = apiKey || Deno.env.get('OPENAI_API_KEY')
-    
-    if (!finalApiKey && (action === 'chat' || action === 'embedding')) {
-      return new Response(JSON.stringify({ error: 'Missing OPENAI_API_KEY. Set it in Supabase Secrets.' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200, 
-      })
-    }
-
-    // 2. Route Action
-    
-    // --- SCRAPE ACTION ---
-    if (action === 'scrape') {
-      const { url } = payload;
-      if (!url) throw new Error('URL is required');
-      console.log('Scraping URL:', url);
-      
-      const controller = new AbortController();
-      // 25s target timeout - fail fast if site is stuck so we can return error to UI
-      const timeoutId = setTimeout(() => controller.abort(), 25000); 
-
-      try {
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.google.com/',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'cross-site',
-            'Upgrade-Insecure-Requests': '1'
-          },
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-             // Return as text so UI can show it
-             return new Response(JSON.stringify({ text: "Error: Failed to fetch URL (" + response.status + "). Site might block bots." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
-        
-        // STREAMING READ with Size Limit (Max 2MB)
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let html = '';
-        let receivedLength = 0;
-        const MAX_SIZE = 2 * 1024 * 1024; // 2MB limit
-
-        if (reader) {
-          while(true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            receivedLength += value.length;
-            html += decoder.decode(value, {stream: true});
-            if (receivedLength > MAX_SIZE) {
-              console.log('Scraper: Size limit exceeded, truncating download.');
-              reader.cancel();
-              break;
-            }
-          }
-          html += decoder.decode(); 
-        } else {
-          html = await response.text();
-        }
-        
-        const $ = cheerio.load(html);
-        
-        // Remove junk
-        $('script, style, noscript, iframe, svg, canvas, video, audio, link, button, input, form').remove();
-        $('header, footer, nav, aside, [role="banner"], [role="navigation"], [role="contentinfo"]').remove();
-        $('.menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal, .cookie-banner, .social-share').remove();
-        
-        // Priority Extraction for Real Estate/Articles
-        let text = '';
-        const selectors = [
-            'article', 
-            'main', 
-            '#content', 
-            '.content', 
-            '.property-description', 
-            '.listing-details', 
-            '.post-content',
-            '#main',
-            '.entry-content'
-        ];
-        
-        // Try to find the best container
-        for (const sel of selectors) {
-            const el = $(sel);
-            if (el.length > 0 && el.text().trim().length > 200) {
-                text = el.text();
-                break;
-            }
-        }
-        
-        // Fallback to body if specific selectors fail
-        if (!text) {
-            text = $('body').text();
-        }
-        
-        // Clean whitespace
-        text = text.replace(new RegExp('[\\\\s\\\\n\\\\r]+', 'g'), ' ').trim();
-        
-        if (text.length > 25000) text = text.substring(0, 25000) + '... (Truncated)';
-        
-        if (!text || text.length < 50) {
-             text = "Error: Could not extract readable text. The site might be dynamic (React/Vue/SPA) and requires a headless browser.";
-        }
-          
-        return new Response(JSON.stringify({ text }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-
-      } catch (fetchErr) {
-        clearTimeout(timeoutId);
-        let errorMsg = "Error: Scraping failed.";
-        if (fetchErr.name === 'AbortError') {
-            errorMsg = "Error: Site took too long to respond (Timeout). Please copy text manually.";
-        } else {
-            errorMsg = "Error: " + fetchErr.message;
-        }
-        // Return 200 with error message in text so client doesn't throw
-        return new Response(JSON.stringify({ text: errorMsg }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
-    }
-
-    // --- AI ACTIONS ---
-    const openai = new OpenAI({ apiKey: finalApiKey })
-
-    if (action === 'chat') {
-      const completion = await openai.chat.completions.create(payload)
-      return new Response(JSON.stringify(completion), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-    }
-
-    if (action === 'embedding') {
-      const embedding = await openai.embeddings.create(payload)
-      return new Response(JSON.stringify(embedding), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-    }
-
-    throw new Error('Invalid action: ' + action)
-
-  } catch (error) {
-    console.error('Edge Function Error:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
-    })
-  }
-})
-`;
 
 const AIChatPage: React.FC = () => {
     const { user, profile, organization, deductCredit } = useAuth();
@@ -365,7 +135,7 @@ const AIChatPage: React.FC = () => {
 
     const showNotification = (type: 'success'|'error'|'info', message: string) => {
         setNotification({ type, message });
-        setTimeout(() => setNotification(null), 5000); // 5s timeout
+        setTimeout(() => setNotification(null), 5000); 
     };
 
     const fetchKnowledgeBase = async () => {
@@ -840,60 +610,69 @@ const AIChatPage: React.FC = () => {
 
     const handleScrape = async () => {
         if (!urlInput || !supabase) return;
+
         setIsScraping(true);
         const domain = new URL(urlInput).hostname;
+
         showNotification('info', `Scraping content from ${domain}...`);
         addLog(`System: Scraping content from ${urlInput}...`);
-        
+
         try {
-            // Increased client timeout to 90s to ensure we catch the server response (which now has a safe 25s timeout)
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (90s).")), 90000)
+            const { data, error } = await supabase.functions.invoke(
+            'openai-proxy',
+            {
+                body: {
+                action: 'scrape',
+                url: urlInput,
+                },
+            }
             );
 
-            const requestPromise = supabase.functions.invoke('openai-proxy', {
-                body: { action: 'scrape', url: urlInput }
-            });
-
-            const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;
-
+            // Network / function error
             if (error) {
-                console.error("Supabase Invoke Error:", error);
-                if (error.message && (error.message.includes('non-2xx') || error.message.includes('404'))) {
-                    throw new Error("Function not found or crashed. Please re-deploy 'openai-proxy' function using the provided code.");
-                }
-                throw error;
+            console.error('Supabase invoke error:', error);
+            throw new Error(error.message || 'Edge function error');
             }
-            if (data?.error) throw new Error(data.error);
-            
-            // Check if returned text is actually an error message from our new handler
-            if (data?.text && data.text.startsWith('Error:')) {
-                 addLog(data.text);
-                 showNotification('error', data.text);
-                 setKnowledgeInput(data.text); // Still show it so user knows
-            } else if (data?.text) {
-                setKnowledgeInput(data.text);
-                addLog('System: Content scraped successfully.');
-                showNotification('success', 'Content scraped successfully!');
-            } else {
-                addLog('Warning: No content extracted from URL.');
-                showNotification('error', 'No text found on page.');
+
+            // Edge returned error
+            if (data?.error) {
+            throw new Error(data.error);
             }
-        } catch (e: any) {
-            console.error("Scrape Error:", e);
-            addLog(`Error: Scraping failed - ${e.message}`);
-            showNotification('error', `Scraping failed: ${e.message}`);
+
+            // Scraper returned readable error text
+            if (data?.text?.startsWith('Error:')) {
+            addLog(data.text);
+            showNotification('error', data.text);
+            setKnowledgeInput(data.text);
+            return;
+            }
+
+            // Success
+            if (data?.text) {
+            setKnowledgeInput(data.text);
+            addLog('System: Content scraped successfully.');
+            showNotification('success', 'Content scraped successfully!');
+            return;
+            }
+
+            // Nothing returned
+            throw new Error('No text returned from scraper');
+
+        } catch (err: any) {
+            console.error('Scrape Error:', err);
+            addLog(`Error: Scraping failed - ${err.message}`);
+            showNotification('error', `Scraping failed: ${err.message}`);
         } finally {
             setIsScraping(false);
         }
     };
+
 
     const addKnowledge = async () => {
         if (!knowledgeInput.trim() || !supabase || !organization) return;
         setIsEmbedding(true);
         try {
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-            // Replicating invokeAI logic for embedding
             const { data, error } = await supabase.functions.invoke('openai-proxy', {
                 body: { 
                     action: 'embedding', 
@@ -1048,10 +827,10 @@ const AIChatPage: React.FC = () => {
 
     return (
         <div className="h-full flex flex-col overflow-hidden bg-slate-950 relative">
-            {/* Toast Notification */}
+            {/* Toast Notification - Updated positioning and z-index */}
             {notification && (
                 <div className={cn(
-                    "fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-sm font-medium animate-fadeInUp flex items-center gap-2",
+                    "fixed top-20 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg border text-sm font-medium animate-fadeInUp flex items-center gap-2",
                     notification.type === 'success' ? "bg-green-900/90 border-green-700 text-white" :
                     notification.type === 'error' ? "bg-red-900/90 border-red-700 text-white" :
                     "bg-blue-900/90 border-blue-700 text-white"
@@ -1116,174 +895,50 @@ const AIChatPage: React.FC = () => {
                     </div>
 
                     <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-[#0b101a]">
-                        <div className={cn(
-                            "flex-col border-r border-slate-800 bg-slate-900/30 transition-all",
-                            selectedPhone ? "hidden md:flex w-[320px]" : "flex w-full md:w-[320px]"
-                        )}>
-                            <ChatList 
-                                chats={chats} 
-                                selectedPhone={selectedPhone} 
-                                onSelect={setSelectedPhone}
-                                searchQuery={searchQuery}
-                                onSearchChange={setSearchQuery}
-                            />
-                        </div>
-                        <div className={cn(
-                            "flex-col bg-[#0b101a] relative transition-all",
-                            selectedPhone ? "flex flex-1" : "hidden md:flex flex-1"
-                        )}>
-                            <ChatWindow 
-                                selectedPhone={selectedPhone}
-                                messages={(selectedPhone && chats.find(([p]) => p === selectedPhone)?.[1]) || []}
-                                onSendMessage={handleSimulatorSend}
-                                input={input}
-                                setInput={setInput}
-                                aiStatus={aiStatus}
-                                onBack={() => setSelectedPhone(null)}
-                                onAnalyze={classifyMessage}
-                            />
-                        </div>
+                        <SimulatorTab 
+                            chats={chats}
+                            selectedPhone={selectedPhone}
+                            setSelectedPhone={setSelectedPhone}
+                            searchQuery={searchQuery}
+                            setSearchQuery={setSearchQuery}
+                            messages={(selectedPhone && chats.find(([p]) => p === selectedPhone)?.[1]) || []}
+                            input={input}
+                            setInput={setInput}
+                            aiStatus={aiStatus}
+                            handleSimulatorSend={handleSimulatorSend}
+                            classifyMessage={classifyMessage}
+                        />
                     </TabsContent>
 
                     <TabsContent value="knowledge" className="flex-1 overflow-y-auto p-6 m-0">
-                        <div className="max-w-4xl mx-auto space-y-6">
-                            <div className="flex justify-between items-center">
-                                <div>
-                                    <h2 className="text-xl font-bold text-white">Knowledge Base</h2>
-                                    <p className="text-sm text-slate-400">Add documents or website content to train your AI agent.</p>
-                                </div>
-                            </div>
-                            
-                            <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
-                                <CardHeader><CardTitle className="text-sm">Add New Knowledge</CardTitle></CardHeader>
-                                <CardContent className="space-y-4">
-                                    {/* Import Sources Row */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
-                                        <div className="flex gap-2 items-center">
-                                            <Input 
-                                                placeholder="https://example.com/property" 
-                                                value={urlInput} 
-                                                onChange={(e) => setUrlInput(e.target.value)} 
-                                                className="bg-slate-950 border-slate-700 h-10" 
-                                            />
-                                            <Button 
-                                                variant="outline" 
-                                                onClick={handleScrape} 
-                                                disabled={isScraping || !urlInput}
-                                                className="border-slate-700 hover:bg-slate-800"
-                                            >
-                                                {isScraping ? 'Scraping...' : 'Import URL'}
-                                            </Button>
-                                        </div>
-                                        <div className="flex justify-end gap-2 items-center">
-                                            <span className="text-xs text-slate-500">or upload file:</span>
-                                            <Input 
-                                                type="file" 
-                                                className="hidden" 
-                                                ref={fileInputRef} 
-                                                onChange={handleFileUpload} 
-                                                accept=".txt,.md,.csv,.json,.pdf,.docx" 
-                                            />
-                                            <Button 
-                                                variant="outline" 
-                                                onClick={() => fileInputRef.current?.click()}
-                                                className="border-slate-700 hover:bg-slate-800"
-                                            >
-                                                Upload File (PDF/Text)
-                                            </Button>
-                                        </div>
-                                    </div>
-
-                                    {/* Content Editor */}
-                                    <textarea 
-                                        value={knowledgeInput} 
-                                        onChange={(e) => setKnowledgeInput(e.target.value)} 
-                                        className="w-full h-48 bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm focus:ring-1 focus:ring-blue-500 font-mono leading-relaxed" 
-                                        placeholder="Content from files or URLs will appear here for review before saving..." 
-                                    />
-                                    
-                                    <div className="flex justify-between items-center pt-2">
-                                        <p className="text-xs text-slate-500">Content is converted to vectors using OpenAI Embeddings.</p>
-                                        <Button onClick={addKnowledge} disabled={isEmbedding || !knowledgeInput.trim()} className="bg-blue-600 hover:bg-blue-500 px-6">
-                                            {isEmbedding ? 'Vectorizing...' : 'Save to Knowledge Base'}
-                                        </Button>
-                                    </div>
-                                </CardContent>
-                            </Card>
-
-                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                {knowledgeItems.map((item) => (
-                                    <Card key={item.id} className="border border-slate-800 bg-slate-900/20">
-                                        <CardContent className="p-4">
-                                            <p className="text-xs text-slate-300 line-clamp-4 leading-relaxed">{item.content}</p>
-                                            <div className="mt-3 flex justify-between items-center text-[10px] text-slate-500"><span>ID: {item.id}</span><Badge variant="outline" className="border-slate-800">Chunk</Badge></div>
-                                        </CardContent>
-                                    </Card>
-                                ))}
-                            </div>
-                        </div>
+                        <KnowledgeBaseTab 
+                            urlInput={urlInput}
+                            setUrlInput={setUrlInput}
+                            handleScrape={handleScrape}
+                            isScraping={isScraping}
+                            fileInputRef={fileInputRef}
+                            handleFileUpload={handleFileUpload}
+                            knowledgeInput={knowledgeInput}
+                            setKnowledgeInput={setKnowledgeInput}
+                            addKnowledge={addKnowledge}
+                            isEmbedding={isEmbedding}
+                            knowledgeItems={knowledgeItems}
+                        />
                      </TabsContent>
 
                     <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0">
-                        <div className="max-w-3xl mx-auto space-y-6">
-                            <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
-                                <CardHeader><CardTitle>Webhook Connection</CardTitle><CardDescription>Test connectivity to your Supabase Edge Function.</CardDescription></CardHeader>
-                                <CardContent className="space-y-4">
-                                    <div className="flex gap-2">
-                                        <Input readOnly value={webhookUrl || "No URL Configured"} className="bg-slate-950 font-mono text-blue-300" />
-                                        <Button onClick={checkWebhookReachability}>Test Ping</Button>
-                                    </div>
-                                    <div className="text-sm text-slate-400">
-                                        <p>Status: <span className={cn("font-bold", webhookStatus === 'success' ? "text-green-400" : webhookStatus === 'error' ? "text-red-400" : "text-slate-500")}>{webhookStatus}</span></p>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                            
-                             <Card className="border border-blue-500/30 bg-blue-900/10 text-white">
-                                <CardHeader>
-                                    <CardTitle className="text-blue-300">Required: OpenAI Proxy Function</CardTitle>
-                                    <CardDescription>
-                                        To fix CORS errors, you MUST deploy this function to Supabase as <code>openai-proxy</code>.
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-300 font-mono border border-slate-800 max-h-[300px]"><pre>{OPENAI_PROXY_CODE}</pre></div>
-                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(OPENAI_PROXY_CODE)}>Copy Function Code</Button>
-                                    <div className="mt-2 text-xs text-slate-500">
-                                        Deploy command: <code className="bg-slate-800 px-1">supabase functions deploy openai-proxy --no-verify-jwt</code>
-                                    </div>
-                                    <div className="mt-4 text-xs text-slate-400 border-t border-slate-800 pt-2">
-                                        <strong>Setup API Key:</strong>
-                                        <br/>
-                                        Go to Supabase Dashboard &gt; Settings &gt; Edge Functions &gt; Add Secret.
-                                        <br/>
-                                        Name: <code>OPENAI_API_KEY</code>
-                                        <br/>
-                                        Value: <code>sk-...</code> (Your OpenAI Key)
-                                    </div>
-                                </CardContent>
-                            </Card>
-
-                            <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
-                                <CardHeader><CardTitle>Twilio Webhook Function</CardTitle></CardHeader>
-                                <CardContent>
-                                    <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px]"><pre>{EDGE_FUNCTION_CODE}</pre></div>
-                                    <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Code</Button>
-                                </CardContent>
-                            </Card>
-                        </div>
+                        <ConnectionStatusTab 
+                            webhookUrl={webhookUrl}
+                            checkWebhookReachability={checkWebhookReachability}
+                            webhookStatus={webhookStatus}
+                        />
                     </TabsContent>
 
                     <TabsContent value="logs" className="flex-1 overflow-hidden m-0 bg-[#0c0c0c] text-white p-4 font-mono text-xs">
-                         <div className="h-full overflow-y-auto space-y-1">
-                            {logs.map((log, i) => (
-                                <div key={i} className="border-b border-white/5 pb-1">
-                                    <span className="text-slate-500 mr-3">{log.split(']')[0]}]</span>
-                                    <span className={cn(log.includes('Error') ? "text-red-400" : log.includes('Realtime') ? "text-blue-400" : log.includes('Brain') ? "text-yellow-400" : "text-green-400")}>{log.split(']')[1]}</span>
-                                </div>
-                            ))}
-                            <div ref={messagesEndRef} />
-                         </div>
+                         <SystemLogsTab 
+                            logs={logs}
+                            messagesEndRef={messagesEndRef}
+                         />
                     </TabsContent>
                 </Tabs>
             </div>
