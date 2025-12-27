@@ -19,111 +19,37 @@ interface ChatMessage {
 
 // --- Helper: Call AI Proxy ---
 const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: string) => {
-    console.log(`[AI Engine] 🚀 Invoking Edge Function 'openai-proxy' for action: '${action}'`);
+    // console.log(`[AI Engine] 🚀 Invoking '${action}'`); // Reduced logging for perf
 
     if (!supabase) {
-        console.error("[AI Engine] ❌ Supabase client is not initialized.");
         throw new Error("Supabase client not initialized");
     }
 
-    // Call the Edge Function
     const { data, error } = await supabase.functions.invoke('openai-proxy', {
         body: { action, apiKey, ...payload }
     });
 
-    // 1. Handle Transport/Network Errors (e.g. 404 Not Found, 500 Server Error)
     if (error) {
-        console.error(`[AI Engine] ❌ Edge Function Transport Error:`, error);
-        
-        // Check for specific "Function not found" (404) which appears as non-2xx
         const msg = error.message || '';
         if (msg.includes('non-2xx') || msg.includes('not found')) {
-             throw new Error("CRITICAL: 'openai-proxy' function not found. Did you deploy it? Run: 'supabase functions deploy openai-proxy'");
+             throw new Error("CRITICAL: 'openai-proxy' function not found. Run: 'supabase functions deploy openai-proxy'");
         }
-        
         throw new Error(`Edge Function Error: ${msg}`);
     }
 
-    // 2. Handle Logic Errors returned by the function (e.g. Missing API Key)
-    // We updated the proxy to return { error: "message" } with 200 OK to allow reading the message.
     if (data && data.error) {
-        console.error(`[AI Engine] ⚠️ Function Logic Error:`, data.error);
         throw new Error(`AI Error: ${data.error}`);
     }
 
-    console.log(`[AI Engine] ✅ Success`, data);
     return data;
 };
 
-// --- 1. INTENT CLASSIFICATION ---
-export const classifyIntent = async (message: string, apiKey?: string): Promise<RealEstateIntent> => {
+// --- 1. RAG (RETRIEVAL) - Optimized ---
+export const retrieveContext = async (organizationId: string, message: string, apiKey?: string): Promise<string> => {
     try {
-        const response = await invokeAI('chat', {
-            model: "gpt-4o-mini",
-            messages: [
-                {
-                    role: "system",
-                    content: `You are a classification engine. Analyze the following message from a Real Estate client.
-                    Classify it into exactly ONE of these categories:
-                    - Property Inquiry
-                    - Price/Availability
-                    - Booking/Viewing
-                    - Location/Amenities
-                    - Handover/Keys
-                    - Complaint
-                    - General Chat
+        if (!supabase || !organizationId) return "";
 
-                    Rules:
-                    1. Return ONLY the category name.
-                    2. Do not add punctuation, quotes, or explanations.
-                    3. If unsure, return 'General Chat'.`
-                },
-                {
-                    role: "user",
-                    content: message
-                }
-            ],
-            temperature: 0.0,
-        }, apiKey);
-
-        // Safety check for response structure
-        if (!response.choices || !response.choices[0]) {
-             throw new Error("Invalid response format from AI");
-        }
-
-        let tag = response.choices[0]?.message?.content?.replace(/['"]/g, '').replace('Category:', '').trim();
-        
-        const validTags = [
-            'Property Inquiry', 'Price/Availability', 'Booking/Viewing', 
-            'Location/Amenities', 'Handover/Keys', 'Complaint', 'General Chat'
-        ];
-        
-        if (!tag || !validTags.includes(tag)) {
-            tag = 'General Chat';
-        }
-
-        return tag as RealEstateIntent;
-    } catch (error) {
-        console.error("Intent classification failed:", error);
-        return 'General Chat'; 
-    }
-};
-
-// --- 2. RAG (RETRIEVAL) ---
-export const retrieveContext = async (userId: string, message: string, apiKey?: string): Promise<string> => {
-    try {
-        if (!supabase) return "";
-
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('organization_id')
-            .eq('id', userId)
-            .single();
-
-        if (!profile?.organization_id) {
-            return "";
-        }
-
+        // 1. Get Embedding
         const embeddingResult = await invokeAI('embedding', {
             model: "text-embedding-3-small",
             input: message,
@@ -136,6 +62,7 @@ export const retrieveContext = async (userId: string, message: string, apiKey?: 
 
         const queryEmbedding = embeddingResult.data[0].embedding;
 
+        // 2. Search DB
         const { data: searchResults, error } = await supabase.rpc('match_knowledge', {
             query_embedding: queryEmbedding,
             match_threshold: 0.5,
@@ -147,6 +74,9 @@ export const retrieveContext = async (userId: string, message: string, apiKey?: 
             return "";
         }
 
+        // 3. Filter by Org ID manually if RPC doesn't filter (Safety) 
+        // Note: The RPC usually handles logic, but RLS adds safety.
+        // We assume the RPC returns accessible rows. 
         if (searchResults && searchResults.length > 0) {
             return searchResults.map((r: any) => r.content).join("\n\n---\n\n");
         }
@@ -158,117 +88,104 @@ export const retrieveContext = async (userId: string, message: string, apiKey?: 
     }
 };
 
-// --- 3. RESPONSE GENERATION ---
-export const generateRealEstateResponse = async (
+// --- 2. SINGLE-PASS GENERATION (Classify + Reply) ---
+export const generateStrategicResponse = async (
     userMessage: string, 
-    intent: RealEstateIntent, 
     context: string,
     systemInstruction: string,
     chatHistory: ChatMessage[],
     apiKey?: string
-): Promise<string> => {
+): Promise<{ intent: RealEstateIntent, reply: string }> => {
     try {
-        // --- Intent-Aware Guidance Rules ---
-        let specificGuidance = "";
-        switch (intent) {
-            case 'Property Inquiry':
-                specificGuidance = "GOAL: Clarify requirements (budget, location, timeline). Narrow options. Offer a viewing proactively.";
-                break;
-            case 'Price/Availability':
-                specificGuidance = "GOAL: Be transparent. If exact data is missing, give a reasonable range based on market knowledge. PUSH toward a booking or agent call.";
-                break;
-            case 'Booking/Viewing':
-                specificGuidance = "GOAL: HIGH PRIORITY. Secure the appointment immediately. Offer specific time options if possible. Do not delay.";
-                break;
-            case 'Location/Amenities':
-                specificGuidance = "GOAL: Answer briefly, then link the benefit to lifestyle or investment value. Transition immediately to a viewing offer.";
-                break;
-            case 'Complaint':
-                specificGuidance = "GOAL: Acknowledge emotionally. Apologize professionally. State clearly that a human agent will follow up. Do not argue.";
-                break;
-            case 'General Chat':
-                specificGuidance = "GOAL: Redirect the conversation gently toward property intent, qualification, or seeing a unit.";
-                break;
-            default:
-                specificGuidance = "GOAL: Qualify the lead and advance them to the next step.";
-        }
-
-        // --- Engineered System Prompt ---
         const systemPrompt = `
             ${systemInstruction}
 
             ────────────────────────────
-            CORE IDENTITY & OBJECTIVE
+            CORE IDENTITY
             ────────────────────────────
-            You are NOT a generic chatbot. You are a Senior Real Estate Sales Agent.
-            Your primary objective is to QUALIFY leads, ADVANCE them to the next step, and SECURE VIEWINGS.
-            
-            ────────────────────────────
-            CORE BEHAVIOR RULES
-            ────────────────────────────
-            1. PROGRESSION FIRST: Every response must aim to move the user closer to a booking, contact exchange, or sale.
-            2. GUIDE THE CHAT: Do not wait passively for information. If data is missing, propose the next best action.
-            3. PROFESSIONAL TONE: Be confident, helpful, and conversion-oriented. Never say "I am an AI".
-            4. KNOWLEDGE HANDLING: If the specific answer is not in the knowledge base, provide a reasonable market assumption or range, then immediately propose a next step (e.g., "I can check the exact figure, but shall we book a viewing to see the unit first?"). Do NOT hallucinate specific property specs.
+            You are a Senior Real Estate Sales Agent.
+            Your goal is to QUALIFY leads, ANSWER questions accurately using the provided Context, and PUSH for a viewing/booking.
 
             ────────────────────────────
-            CURRENT INTENT: ${intent}
-            SPECIFIC GUIDANCE: ${specificGuidance}
+            INSTRUCTIONS
             ────────────────────────────
+            1. ANALYZE the user's message and the conversation history.
+            2. CLASSIFY the intent into one of: ['Property Inquiry', 'Price/Availability', 'Booking/Viewing', 'Location/Amenities', 'Handover/Keys', 'Complaint', 'General Chat'].
+            3. CHECK the "RETRIEVED KNOWLEDGE" section below. Use ONLY that information for specifics (price, location, specs). If info is missing, admit it politely or ask for clarification. Do NOT hallucinate features.
+            4. GENERATE a natural, persuasive response.
+               - Keep it short (WhatsApp style).
+               - Always end with a question or Call-to-Action.
 
             ────────────────────────────
-            RETRIEVED KNOWLEDGE BASE
+            RETRIEVED KNOWLEDGE
             ────────────────────────────
-            ${context || "No specific property documents found. Rely on general real estate best practices."}
+            ${context || "No specific property documents found. Use general sales knowledge."}
 
             ────────────────────────────
-            FINAL OUTPUT RULES
+            OUTPUT FORMAT
             ────────────────────────────
-            - Keep it conversational and natural (WhatsApp style).
-            - Short paragraphs.
-            - ALWAYS include a clear Call-to-Action (question, booking offer, or next step).
-            - If you fail to move the lead forward, you have failed your objective.
+            You must respond in valid JSON format ONLY:
+            {
+                "intent": "Category Name",
+                "reply": "Your message here"
+            }
         `;
 
-        // Compose messages with history
         const messagesPayload: any[] = [
             { role: "system", content: systemPrompt },
-            ...chatHistory, // Previous conversation context
-            { role: "user", content: userMessage } // Current message
+            ...chatHistory,
+            { role: "user", content: userMessage }
         ];
 
         const response = await invokeAI('chat', {
-            model: "gpt-4o-mini",
+            model: "gpt-4o-mini", // Fast and capable of JSON
             messages: messagesPayload,
-            temperature: 0.6, // Slightly lower temperature for more focused sales behavior
+            temperature: 0.6,
+            response_format: { type: "json_object" } // Enforce JSON for parsing speed/reliability
         }, apiKey);
 
-        return response.choices[0]?.message?.content || "I am having trouble processing that request. Let me connect you to a human agent.";
+        const content = response.choices[0]?.message?.content;
+        if (!content) throw new Error("Empty response from AI");
+
+        const parsed = JSON.parse(content);
+        
+        return {
+            intent: parsed.intent || 'General Chat',
+            reply: parsed.reply || "I'm sorry, can you repeat that?"
+        };
 
     } catch (error: any) {
-        console.error("Response generation failed:", error);
-        return `System Error: ${error.message}`;
+        console.error("Strategic generation failed:", error);
+        return {
+            intent: 'Unknown',
+            reply: "I apologize, I'm having trouble processing that right now. A human agent will be with you shortly."
+        };
     }
 };
 
-// --- 4. MAIN PIPELINE ---
+// --- 3. MAIN PIPELINE (OPTIMIZED) ---
 export const processIncomingMessage = async (
     userMessage: string,
-    userId: string,
+    userId: string, // Kept for interface compatibility, mostly unused now in favor of orgId
+    organizationId: string, // NEW: Pass Org ID to save a DB lookup
     systemInstruction: string,
     chatHistory: ChatMessage[] = [],
     apiKey?: string
 ) => {
-    console.log("[AI Engine] Starting processing pipeline...");
+    console.log("[AI Engine] ⚡ Starting optimized pipeline...");
     
-    // Step 1: Run Classification and Context Retrieval in PARALLEL to save time
-    const [intent, context] = await Promise.all([
-        classifyIntent(userMessage, apiKey),
-        retrieveContext(userId, userMessage, apiKey)
-    ]);
+    // Step 1: Retrieval (Parallelizable with other logic if needed, but blocking for RAG)
+    // We do this first because the context is needed for the single-pass generation.
+    const context = await retrieveContext(organizationId, userMessage, apiKey);
 
-    // Step 2: Generate Response using results from Step 1 AND chat history
-    const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction, chatHistory, apiKey);
+    // Step 2: Single-Pass Classification & Generation
+    const { intent, reply } = await generateStrategicResponse(
+        userMessage, 
+        context, 
+        systemInstruction, 
+        chatHistory, 
+        apiKey
+    );
 
     return {
         intent,

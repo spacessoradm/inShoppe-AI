@@ -293,19 +293,23 @@ const AIChatPage: React.FC = () => {
 
     const classifyMessage = async (msgId: string, text: string) => {
         if (!supabase || !user) return;
-        setAiStatus('Classifying...');
+        setAiStatus('Analyzing...');
         try {
             setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
             
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
-            // Timeout safety for classify
-            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 30000));
+            // Timeout safety - Increased to 120s
+            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 120000));
+            
+            const orgId = organization ? organization.id : 'demo-org';
+
             const processPromise = processIncomingMessage(
                 text, 
                 user.id,
+                orgId,
                 systemInstructionRef.current,
-                [], // No history needed for just classification
+                [], 
                 activeKey
             );
             
@@ -332,9 +336,9 @@ const AIChatPage: React.FC = () => {
         try {
             const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
             
-            // Race against a timeout to ensure we don't hang indefinitely. Increased to 60s.
+            // Race against a timeout to ensure we don't hang indefinitely. Increased to 120s.
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Processing timed out (60s)")), 60000)
+                setTimeout(() => reject(new Error("Processing timed out (120s)")), 120000)
             );
 
             // Get Chat History
@@ -348,9 +352,13 @@ const AIChatPage: React.FC = () => {
                 content: m.text
             }));
 
+            // Pass Org ID to avoid extra DB lookup in retrieval
+            const orgId = organization ? organization.id : 'demo-org';
+
             const processPromise = processIncomingMessage(
                 text,
                 user.id,
+                orgId,
                 systemInstructionRef.current,
                 chatHistory,
                 activeKey
@@ -363,7 +371,7 @@ const AIChatPage: React.FC = () => {
             // Update intent
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
 
-            setAiStatus(contextUsed ? 'Searching Knowledge...' : 'Replying...');
+            setAiStatus(contextUsed ? 'Knowledge Used' : 'Replying...');
             // Small delay for UX naturalness, but only if it was fast
             await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -584,9 +592,12 @@ const AIChatPage: React.FC = () => {
                     content: m.text
                  }));
 
+                 const orgId = organization ? organization.id : 'demo-org';
+
                  const { intent, reply } = await processIncomingMessage(
                      text, 
                      'demo', 
+                     orgId,
                      systemInstructionRef.current, 
                      chatHistory, 
                      activeKey
@@ -644,58 +655,48 @@ const AIChatPage: React.FC = () => {
 
     const handleScrape = async () => {
         if (!urlInput || !supabase) return;
-
         setIsScraping(true);
         const domain = new URL(urlInput).hostname;
-
         showNotification('info', `Scraping content from ${domain}...`);
         addLog(`System: Scraping content from ${urlInput}...`);
-
+        
         try {
-            const { data, error } = await supabase.functions.invoke(
-            'openai-proxy',
-            {
-                body: {
-                action: 'scrape',
-                url: urlInput,
-                },
-            }
+            // Increased client timeout to 120s
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Request timed out (120s).")), 120000)
             );
 
-            // Network / function error
+            const requestPromise = supabase.functions.invoke('openai-proxy', {
+                body: { action: 'scrape', url: urlInput }
+            });
+
+            const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;
+
             if (error) {
-            console.error('Supabase invoke error:', error);
-            throw new Error(error.message || 'Edge function error');
+                console.error("Supabase Invoke Error:", error);
+                if (error.message && (error.message.includes('non-2xx') || error.message.includes('404'))) {
+                    throw new Error("Function not found. Please re-deploy 'openai-proxy'.");
+                }
+                throw error;
             }
-
-            // Edge returned error
-            if (data?.error) {
-            throw new Error(data.error);
+            if (data?.error) throw new Error(data.error);
+            
+            if (data?.text && data.text.startsWith('Error:')) {
+                 addLog(data.text);
+                 showNotification('error', data.text);
+                 setKnowledgeInput(data.text); 
+            } else if (data?.text) {
+                setKnowledgeInput(data.text);
+                addLog('System: Content scraped successfully.');
+                showNotification('success', 'Content scraped successfully!');
+            } else {
+                addLog('Warning: No content extracted from URL.');
+                showNotification('error', 'No text found on page.');
             }
-
-            // Scraper returned readable error text
-            if (data?.text?.startsWith('Error:')) {
-            addLog(data.text);
-            showNotification('error', data.text);
-            setKnowledgeInput(data.text);
-            return;
-            }
-
-            // Success
-            if (data?.text) {
-            setKnowledgeInput(data.text);
-            addLog('System: Content scraped successfully.');
-            showNotification('success', 'Content scraped successfully!');
-            return;
-            }
-
-            // Nothing returned
-            throw new Error('No text returned from scraper');
-
-        } catch (err: any) {
-            console.error('Scrape Error:', err);
-            addLog(`Error: Scraping failed - ${err.message}`);
-            showNotification('error', `Scraping failed: ${err.message}`);
+        } catch (e: any) {
+            console.error("Scrape Error:", e);
+            addLog(`Error: Scraping failed - ${e.message}`);
+            showNotification('error', `Scraping failed: ${e.message}`);
         } finally {
             setIsScraping(false);
         }
