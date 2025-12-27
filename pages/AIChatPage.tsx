@@ -96,6 +96,8 @@ const AIChatPage: React.FC = () => {
     
     // --- State: Data ---
     const [messages, setMessages] = useState<SimMessage[]>([]);
+    const messagesRef = useRef<SimMessage[]>([]); // Ref to hold latest messages for async callbacks
+
     const [logs, setLogs] = useState<string[]>([]);
     const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
     const [input, setInput] = useState('');
@@ -103,10 +105,11 @@ const AIChatPage: React.FC = () => {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Keep ref updated
+    // Keep ref updated with latest state
     useEffect(() => {
+        messagesRef.current = messages;
         systemInstructionRef.current = systemInstruction;
-    }, [systemInstruction]);
+    }, [messages, systemInstruction]);
 
     // --- Derived State: Group Messages by Phone ---
     const chats = useMemo(() => {
@@ -302,6 +305,7 @@ const AIChatPage: React.FC = () => {
                 text, 
                 user.id,
                 systemInstructionRef.current,
+                [], // No history needed for just classification
                 activeKey
             );
             
@@ -333,10 +337,22 @@ const AIChatPage: React.FC = () => {
                 setTimeout(() => reject(new Error("Processing timed out (60s)")), 60000)
             );
 
+            // Get Chat History
+            const historyRaw = messagesRef.current
+                .filter(m => m.phone === phone && m.id !== msgId && m.sender !== 'system') // Filter by phone, remove current, remove logs
+                .sort((a, b) => a.fullTimestamp - b.fullTimestamp);
+
+            // Map to OpenAI format
+            const chatHistory = historyRaw.slice(-10).map(m => ({
+                role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+                content: m.text
+            }));
+
             const processPromise = processIncomingMessage(
                 text,
                 user.id,
                 systemInstructionRef.current,
+                chatHistory,
                 activeKey
             );
 
@@ -557,7 +573,25 @@ const AIChatPage: React.FC = () => {
             
             setTimeout(async () => {
                  const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-                 const { intent, reply } = await processIncomingMessage(text, 'demo', systemInstructionRef.current, activeKey);
+                 
+                 // Get Chat History for Demo
+                 const historyRaw = messagesRef.current
+                    .filter(m => m.phone === targetPhone && m.id !== demoId && m.sender !== 'system')
+                    .sort((a, b) => a.fullTimestamp - b.fullTimestamp);
+
+                 const chatHistory = historyRaw.slice(-10).map(m => ({
+                    role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+                    content: m.text
+                 }));
+
+                 const { intent, reply } = await processIncomingMessage(
+                     text, 
+                     'demo', 
+                     systemInstructionRef.current, 
+                     chatHistory, 
+                     activeKey
+                 );
+
                  setMessages(prev => prev.map(m => m.id === demoId ? { ...m, intent_tag: intent } : m));
                  setMessages(prev => [...prev, {
                     id: (Date.now() + 1).toString(), text: reply, sender: 'bot', direction: 'outbound', 

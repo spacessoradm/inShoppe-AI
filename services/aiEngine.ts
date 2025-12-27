@@ -12,6 +12,11 @@ export type RealEstateIntent =
     | 'General Chat'
     | 'Unknown';
 
+interface ChatMessage {
+    role: 'user' | 'assistant';
+    content: string;
+}
+
 // --- Helper: Call AI Proxy ---
 const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: string) => {
     console.log(`[AI Engine] 🚀 Invoking Edge Function 'openai-proxy' for action: '${action}'`);
@@ -159,6 +164,7 @@ export const generateRealEstateResponse = async (
     intent: RealEstateIntent, 
     context: string,
     systemInstruction: string,
+    chatHistory: ChatMessage[],
     apiKey?: string
 ): Promise<string> => {
     try {
@@ -224,12 +230,16 @@ export const generateRealEstateResponse = async (
             - If you fail to move the lead forward, you have failed your objective.
         `;
 
+        // Compose messages with history
+        const messagesPayload: any[] = [
+            { role: "system", content: systemPrompt },
+            ...chatHistory, // Previous conversation context
+            { role: "user", content: userMessage } // Current message
+        ];
+
         const response = await invokeAI('chat', {
             model: "gpt-4o-mini",
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userMessage }
-            ],
+            messages: messagesPayload,
             temperature: 0.6, // Slightly lower temperature for more focused sales behavior
         }, apiKey);
 
@@ -246,6 +256,7 @@ export const processIncomingMessage = async (
     userMessage: string,
     userId: string,
     systemInstruction: string,
+    chatHistory: ChatMessage[] = [],
     apiKey?: string
 ) => {
     console.log("[AI Engine] Starting processing pipeline...");
@@ -256,8 +267,8 @@ export const processIncomingMessage = async (
         retrieveContext(userId, userMessage, apiKey)
     ]);
 
-    // Step 2: Generate Response using results from Step 1
-    const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction, apiKey);
+    // Step 2: Generate Response using results from Step 1 AND chat history
+    const reply = await generateRealEstateResponse(userMessage, intent, context, systemInstruction, chatHistory, apiKey);
 
     return {
         intent,
