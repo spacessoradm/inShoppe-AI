@@ -174,9 +174,31 @@ export const processIncomingMessage = async (
 ) => {
     console.log("[AI Engine] ⚡ Starting optimized pipeline...");
     
-    // Step 1: Retrieval (Parallelizable with other logic if needed, but blocking for RAG)
-    // We do this first because the context is needed for the single-pass generation.
-    const context = await retrieveContext(organizationId, userMessage, apiKey);
+    // OPTIMIZATION 1: Fast Path for Greetings
+    // Detect simple greetings to skip expensive RAG latency
+    const lowerMsg = userMessage.trim().toLowerCase();
+    const cleanMsg = lowerMsg.replace(/[^a-z ]/g, '');
+    const greetings = ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'yo', 'hola'];
+    const isGreeting = greetings.includes(cleanMsg) || (cleanMsg.length < 10 && greetings.some(g => cleanMsg.includes(g)));
+    
+    let context = "";
+    
+    if (!isGreeting) {
+        // OPTIMIZATION 2: RAG with Timeout (Graceful Degradation)
+        // If Retrieval takes > 8 seconds, skip it to ensure responsiveness.
+        // This prevents the "Processing timed out" error if the DB is slow.
+        try {
+            const ragPromise = retrieveContext(organizationId, userMessage, apiKey);
+            const timeoutPromise = new Promise<string>((resolve) => setTimeout(() => resolve(""), 8000));
+            context = await Promise.race([ragPromise, timeoutPromise]);
+            
+            if (!context) console.log("[AI Engine] ⚠️ RAG timed out or returned empty, proceeding without context.");
+        } catch (e) {
+            console.warn("[AI Engine] RAG Error:", e);
+        }
+    } else {
+        console.log("[AI Engine] ⏩ Greeting detected, skipping RAG.");
+    }
 
     // Step 2: Single-Pass Classification & Generation
     const { intent, reply } = await generateStrategicResponse(
