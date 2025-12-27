@@ -62,7 +62,6 @@ const ConsoleLayout: React.FC = () => {
             <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Platform</p>
             <NavItem to="/console/dashboard" icon={HomeIcon} label="Dashboard" />
             <NavItem to="/console/crm" icon={BriefcaseIcon} label="CRM & Leads" />
-            <NavItem to="/console/chat" icon={UsersIcon} label="Chats" />
             <NavItem to="/console/ai-chat" icon={BotIcon} label="AI Agent" />
           </div>
 
