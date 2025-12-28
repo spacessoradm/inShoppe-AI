@@ -1,5 +1,6 @@
 
 import { supabase } from './supabase';
+import { buildRealEstateSystemPrompt } from './aiPrompts';
 
 // --- Real Estate Specific Intents ---
 export type RealEstateIntent = 
@@ -12,7 +13,7 @@ export type RealEstateIntent =
     | 'General Chat'
     | 'Unknown';
 
-// --- NEW: Action Types ---
+// --- Action Types ---
 export type ActionType = 'NONE' | 'QUALIFY_LEAD' | 'REQUEST_VIEWING' | 'SCHEDULE_VIEWING' | 'HANDOVER_TO_AGENT';
 
 export interface ActionDecision {
@@ -28,8 +29,6 @@ interface ChatMessage {
 
 // --- Helper: Call AI Proxy ---
 const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: string) => {
-    // console.log(`[AI Engine] 🚀 Invoking '${action}'`); // Reduced logging for perf
-
     if (!supabase) {
         throw new Error("Supabase client not initialized");
     }
@@ -83,9 +82,6 @@ export const retrieveContext = async (organizationId: string, message: string, a
             return "";
         }
 
-        // 3. Filter by Org ID manually if RPC doesn't filter (Safety) 
-        // Note: The RPC usually handles logic, but RLS adds safety.
-        // We assume the RPC returns accessible rows. 
         if (searchResults && searchResults.length > 0) {
             return searchResults.map((r: any) => r.content).join("\n\n---\n\n");
         }
@@ -106,50 +102,8 @@ export const generateStrategicResponse = async (
     apiKey?: string
 ): Promise<{ intent: RealEstateIntent, reply: string, action: ActionDecision }> => {
     try {
-        const systemPrompt = `
-            ${systemInstruction}
-
-            ────────────────────────────
-            CORE IDENTITY
-            ────────────────────────────
-            You are a Senior Real Estate Sales Agent.
-            Your goal is to QUALIFY leads, ANSWER questions accurately using the provided Context, and PUSH for a viewing/booking.
-
-            ────────────────────────────
-            INSTRUCTIONS
-            ────────────────────────────
-            1. ANALYZE the user's message and the conversation history.
-            2. CLASSIFY the intent into one of: ['Property Inquiry', 'Price/Availability', 'Booking/Viewing', 'Location/Amenities', 'Handover/Keys', 'Complaint', 'General Chat'].
-            3. DECIDE the next business action based on these rules:
-               - QUALIFY_LEAD: For Property Inquiries, Price checks, or initial interest.
-               - REQUEST_VIEWING: If the user shows interest but hasn't confirmed a time.
-               - SCHEDULE_VIEWING: If the user proposes a specific date/time for a visit.
-               - HANDOVER_TO_AGENT: For Complaints, Handover/Keys, or complex legal/financial questions.
-               - NONE: For General Chat or simple greetings.
-            4. CHECK the "RETRIEVED KNOWLEDGE" section below. Use ONLY that information for specifics (price, location, specs). If info is missing, admit it politely or ask for clarification. Do NOT hallucinate features.
-            5. GENERATE a natural, persuasive response.
-               - Keep it short (WhatsApp style).
-               - Always end with a question or Call-to-Action matching your decided action.
-
-            ────────────────────────────
-            RETRIEVED KNOWLEDGE
-            ────────────────────────────
-            ${context || "No specific property documents found. Use general sales knowledge."}
-
-            ────────────────────────────
-            OUTPUT FORMAT
-            ────────────────────────────
-            You must respond in valid JSON format ONLY:
-            {
-                "intent": "Category Name",
-                "reply": "Your message here",
-                "action": {
-                    "type": "NONE | QUALIFY_LEAD | REQUEST_VIEWING | SCHEDULE_VIEWING | HANDOVER_TO_AGENT",
-                    "confidence": 0.85,
-                    "reason": "Short explanation"
-                }
-            }
-        `;
+        // Build the strict prompt using the helper
+        const systemPrompt = buildRealEstateSystemPrompt(systemInstruction, context);
 
         const messagesPayload: any[] = [
             { role: "system", content: systemPrompt },
@@ -158,10 +112,10 @@ export const generateStrategicResponse = async (
         ];
 
         const response = await invokeAI('chat', {
-            model: "gpt-4o-mini", // Fast and capable of JSON
+            model: "gpt-4o-mini",
             messages: messagesPayload,
-            temperature: 0.6,
-            response_format: { type: "json_object" } // Enforce JSON for parsing speed/reliability
+            temperature: 0.4, // Lower temperature for stricter adherence to boundary rules
+            response_format: { type: "json_object" }
         }, apiKey);
 
         const content = response.choices[0]?.message?.content;
@@ -216,7 +170,6 @@ export const analyzeLeadPotential = async (
             return { score: 0, analysis: "No conversation history found." };
         }
 
-        // Limit history to last 15 messages to save tokens but keep context
         const recentHistory = chatHistory.slice(-15);
 
         const response = await invokeAI('chat', {
@@ -225,7 +178,7 @@ export const analyzeLeadPotential = async (
                 { role: "system", content: systemPrompt },
                 { role: "user", content: JSON.stringify(recentHistory) }
             ],
-            temperature: 0.3, // Lower temp for more consistent scoring
+            temperature: 0.3,
             response_format: { type: "json_object" }
         }, apiKey);
 
@@ -247,8 +200,8 @@ export const analyzeLeadPotential = async (
 // --- 4. MAIN PIPELINE (OPTIMIZED) ---
 export const processIncomingMessage = async (
     userMessage: string,
-    userId: string, // Kept for interface compatibility, mostly unused now in favor of orgId
-    organizationId: string, // NEW: Pass Org ID to save a DB lookup
+    userId: string,
+    organizationId: string,
     systemInstruction: string,
     chatHistory: ChatMessage[] = [],
     apiKey?: string
@@ -256,7 +209,6 @@ export const processIncomingMessage = async (
     console.log("[AI Engine] ⚡ Starting optimized pipeline...");
     
     // OPTIMIZATION 1: Fast Path for Greetings
-    // Detect simple greetings to skip expensive RAG latency
     const lowerMsg = userMessage.trim().toLowerCase();
     const cleanMsg = lowerMsg.replace(/[^a-z ]/g, '');
     const greetings = ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'yo', 'hola'];
@@ -265,9 +217,7 @@ export const processIncomingMessage = async (
     let context = "";
     
     if (!isGreeting) {
-        // OPTIMIZATION 2: RAG with Timeout (Graceful Degradation)
-        // If Retrieval takes > 8 seconds, skip it to ensure responsiveness.
-        // This prevents the "Processing timed out" error if the DB is slow.
+        // OPTIMIZATION 2: RAG with Timeout
         try {
             const ragPromise = retrieveContext(organizationId, userMessage, apiKey);
             const timeoutPromise = new Promise<string>((resolve) => setTimeout(() => resolve(""), 8000));
@@ -281,7 +231,7 @@ export const processIncomingMessage = async (
         console.log("[AI Engine] ⏩ Greeting detected, skipping RAG.");
     }
 
-    // Step 2: Single-Pass Classification & Generation
+    // Step 2: Single-Pass Classification & Generation using Strict Real Estate Logic
     const { intent, reply, action } = await generateStrategicResponse(
         userMessage, 
         context, 
