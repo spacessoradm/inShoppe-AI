@@ -213,11 +213,25 @@ const AIChatPage: React.FC = () => {
             }
 
             try {
-                const { data, error } = await supabase
-                    .from('user_settings')
-                    .select('*')
-                    .eq('user_id', user.id)
-                    .maybeSingle();
+                // Add retries to handle case where DB or Table is waking up
+                let data = null;
+                let retries = 0;
+                
+                while (!data && retries < 4) {
+                    const { data: fetched, error } = await supabase
+                        .from('user_settings')
+                        .select('*')
+                        .eq('user_id', user.id)
+                        .maybeSingle();
+                    
+                    if (fetched) {
+                        data = fetched;
+                    } else {
+                        retries++;
+                        // Wait longer between retries (500ms)
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                }
                 
                 if (data) {
                     setAccountSid(data.twilio_account_sid || '');
@@ -236,7 +250,7 @@ const AIChatPage: React.FC = () => {
         };
 
         loadConfig();
-    }, [user, mode]);
+    }, [user]); // Removed 'mode' dependency to prevent infinite loops if mode toggle logic is inside
 
     useEffect(() => {
         if (!supabase || mode !== 'dashboard' || !organization) return;

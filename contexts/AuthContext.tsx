@@ -87,13 +87,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     initAuth();
 
-    // Safety timeout: If auth takes longer than 3 seconds, force loading to false
+    // Safety timeout: If auth takes longer than 5 seconds, force loading to false
+    // Increased from 3s to 5s to allow for cold start retries
     const safetyTimeout = setTimeout(() => {
         if (mounted && loading) {
             console.warn("Auth timed out, forcing app load");
             setLoading(false);
         }
-    }, 3000);
+    }, 5000);
 
     // Setup listener only if supabase exists
     let authListener: { subscription: { unsubscribe: () => void } } | null = null;
@@ -102,16 +103,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
             if (!mounted) return;
             
+            // Only update if session actually changed or we need to re-fetch
+            const currentUser = session?.user ?? null;
             setSession(session);
-            setUser(session?.user ?? null);
+            setUser(currentUser);
             
-            if (session?.user) {
-                await loadProfileAndOrg(session.user.id, session.user.email);
+            if (currentUser) {
+                // If we don't have profile/org yet, fetch them
+                if (!profile || !organization) {
+                    await loadProfileAndOrg(currentUser.id, currentUser.email);
+                }
             } else {
                 setProfile(null);
                 setOrganization(null);
             }
-            setLoading(false);
+            // Note: We don't forcefully set loading(false) here immediately to avoid flickering
+            // if initAuth is still running. initAuth's finally block handles the initial load completion.
+            // But for subsequent auth changes (sign in/out), we might want to manage loading state if needed.
         });
         authListener = data;
     }
@@ -132,22 +140,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       // 1. Fetch Profile
-      // We retry a few times because the Trigger might take a split second to create the profile after signup
+      // Increased retries to 6 (approx 3s) to handle database cold starts
       let profileData = null;
       let retries = 0;
       
-      while (!profileData && retries < 3) {
+      while (!profileData && retries < 6) {
           const { data, error } = await supabase
               .from('profiles')
               .select('*')
               .eq('id', userId)
-              .maybeSingle(); // Use maybeSingle to avoid 406 errors
+              .maybeSingle(); 
           
           if (data) {
               profileData = data;
           } else {
               retries++;
-              await new Promise(r => setTimeout(r, 500)); // Wait 500ms before retry
+              await new Promise(r => setTimeout(r, 500)); 
           }
       }
 
@@ -193,11 +201,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfile(profileData);
           
           // 2. Fetch Organization
-          const { data: orgData } = await supabase
-              .from('organizations')
-              .select('*')
-              .eq('id', profileData.organization_id)
-              .maybeSingle();
+          // Add retries for organization as well
+          let orgData = null;
+          let orgRetries = 0;
+          
+          while (!orgData && orgRetries < 3) {
+              const { data } = await supabase
+                  .from('organizations')
+                  .select('*')
+                  .eq('id', profileData.organization_id)
+                  .maybeSingle();
+              
+              if (data) {
+                  orgData = data;
+              } else {
+                  orgRetries++;
+                  await new Promise(r => setTimeout(r, 500));
+              }
+          }
           
           if (orgData) {
               setOrganization(orgData);
