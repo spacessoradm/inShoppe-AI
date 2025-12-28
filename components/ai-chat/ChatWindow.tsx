@@ -50,36 +50,36 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
     if (!selectedPhone) {
         return (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-500 bg-[#0b101a]">
-                <div className="h-20 w-20 bg-slate-900 rounded-3xl flex items-center justify-center mb-6 shadow-2xl">
-                    <ChatBubbleIcon className="h-10 w-10 text-slate-700" />
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 bg-slate-50 h-full">
+                <div className="h-20 w-20 bg-white rounded-3xl flex items-center justify-center mb-6 shadow-sm border border-slate-200">
+                    <ChatBubbleIcon className="h-10 w-10 text-slate-300" />
                 </div>
-                <h3 className="text-xl font-bold text-slate-300 mb-2">Design chat</h3>
+                <h3 className="text-xl font-bold text-slate-700 mb-2">Design chat</h3>
                 <p>Select a conversation to start chatting</p>
             </div>
         );
     }
 
     return (
-        <div className="flex flex-col h-full bg-[#0b101a] relative">
+        <div className="flex flex-col h-full bg-slate-50 relative">
             {/* Header */}
-            <header className="h-20 px-6 flex items-center justify-between border-b border-slate-800/50 bg-[#0b101a]/80 backdrop-blur-xl sticky top-0 z-10">
+            <header className="h-20 px-6 flex items-center justify-between border-b border-slate-200 bg-white/80 backdrop-blur-xl sticky top-0 z-10">
                 <div className="flex items-center gap-4">
                     <Button 
                         variant="ghost" 
                         size="icon" 
-                        className="md:hidden -ml-2 text-slate-400 hover:text-white"
+                        className="md:hidden -ml-2 text-slate-500 hover:text-slate-900"
                         onClick={onBack}
                     >
                         <ArrowLeftIcon className="w-6 h-6" />
                     </Button>
                     <div>
-                        <h2 className="text-2xl font-bold text-white tracking-tight">{selectedPhone}</h2>
+                        <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{selectedPhone}</h2>
                         <div className="flex items-center gap-2 mt-1">
                             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                            <span className="text-sm text-slate-400">10 online</span>
+                            <span className="text-sm text-slate-500">10 online</span>
                             {aiStatus && (
-                                <Badge variant="outline" className="ml-2 border-indigo-500/30 text-indigo-400 text-[10px] uppercase tracking-wider">
+                                <Badge variant="outline" className="ml-2 border-indigo-200 text-indigo-600 bg-indigo-50 text-[10px] uppercase tracking-wider">
                                     {aiStatus}
                                 </Badge>
                             )}
@@ -87,20 +87,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" className="text-slate-400 hover:text-white">
+                    <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-700">
                         <SearchIcon className="w-5 h-5" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="text-slate-400 hover:text-white">
+                    <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-700">
                         <PhoneIcon className="w-5 h-5" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="text-slate-400 hover:text-white">
+                    <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-700">
                         <MoreVerticalIcon className="w-5 h-5" />
                     </Button>
                 </div>
             </header>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin scrollbar-thumb-slate-800">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin scrollbar-thumb-slate-200">
                 {messages.map((msg, index) => {
                     // Logic for Sender/Receiver visualization
                     // In a CRM: Outbound (Agent) is RIGHT. Inbound (Customer) is LEFT.
@@ -116,19 +116,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                             )}
                         >
                             {!isAgent && (
-                                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-xs font-bold text-white shrink-0 mt-1">
+                                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center text-xs font-bold text-slate-600 shrink-0 mt-1">
                                     {selectedPhone.slice(1,3)}
                                 </div>
                             )}
 
                             <div className={cn("flex flex-col max-w-[70%] sm:max-w-[60%]", isAgent ? "items-end" : "items-start")}>
                                 <div className="flex items-baseline gap-2 mb-1 px-1">
-                                    <span className={cn("text-sm font-bold", isAgent ? "text-indigo-400" : "text-indigo-300")}>
+                                    <span className={cn("text-sm font-bold", isAgent ? "text-indigo-600" : "text-slate-600")}>
                                         {msg.sender === 'system' ? 'System' : (isAgent ? "InShoppe AI" : selectedPhone)}
                                     </span>
                                     {/* Intent Tag for Customer Messages */}
                                     {!isAgent && msg.intent_tag && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-500 shadow-sm">
                                             {msg.intent_tag}
                                         </span>
                                     )}
@@ -137,15 +137,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                                 <div className={cn(
                                     "relative px-5 py-4 text-[15px] leading-relaxed shadow-sm",
                                     isAgent 
-                                        ? "bg-indigo-600 text-white rounded-2xl rounded-tr-sm" 
-                                        : "bg-slate-800 text-slate-100 rounded-2xl rounded-tl-sm border border-slate-700/50"
+                                        ? "bg-indigo-600 text-white rounded-2xl rounded-tr-sm shadow-indigo-200" 
+                                        : "bg-white text-slate-800 rounded-2xl rounded-tl-sm border border-slate-200"
                                 )}>
                                     {msg.text}
                                     
                                     {/* Timestamp inside bubble for cleaner look */}
                                     <div className={cn(
-                                        "text-[10px] mt-2 text-right opacity-60",
-                                        isAgent ? "text-indigo-200" : "text-slate-400"
+                                        "text-[10px] mt-2 text-right opacity-80",
+                                        isAgent ? "text-indigo-100" : "text-slate-400"
                                     )}>
                                         {msg.timestamp}
                                     </div>
@@ -155,7 +155,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                                 {!isAgent && (!msg.intent_tag || msg.intent_tag === 'Processing...') && (
                                     <button 
                                         onClick={() => onAnalyze(msg.id, msg.text)}
-                                        className="mt-2 text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors ml-1"
+                                        className="mt-2 text-xs text-indigo-600 hover:text-indigo-500 flex items-center gap-1 transition-colors ml-1"
                                     >
                                         <SparklesIcon className="w-3 h-3" /> Analyze Intent
                                     </button>
@@ -163,8 +163,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                             </div>
 
                             {isAgent && (
-                                <div className="w-10 h-10 rounded-2xl bg-indigo-900/50 border border-indigo-500/30 flex items-center justify-center shrink-0 mt-1">
-                                    <BotIcon className="w-5 h-5 text-indigo-400" />
+                                <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center shrink-0 mt-1">
+                                    <BotIcon className="w-5 h-5 text-indigo-600" />
                                 </div>
                             )}
                         </div>
@@ -174,12 +174,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             </div>
 
             {/* Input Area */}
-            <div className="p-6 pt-2 bg-[#0b101a] sticky bottom-0 z-10">
+            <div className="p-6 pt-2 bg-slate-50 sticky bottom-0 z-10">
                 <form 
                     onSubmit={handleSubmit}
-                    className="flex items-center gap-3 bg-slate-900 p-2 pl-4 pr-2 rounded-[24px] border border-slate-800 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all shadow-lg shadow-black/20"
+                    className="flex items-center gap-3 bg-white p-2 pl-4 pr-2 rounded-[24px] border border-slate-200 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all shadow-lg shadow-slate-200/50"
                 >
-                    <Button type="button" size="icon" variant="ghost" className="text-slate-400 hover:text-white shrink-0 h-9 w-9">
+                    <Button type="button" size="icon" variant="ghost" className="text-slate-400 hover:text-slate-600 shrink-0 h-9 w-9">
                         <PaperclipIcon className="w-5 h-5" />
                     </Button>
                     
@@ -187,11 +187,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         placeholder="Your message" 
-                        className="flex-1 bg-transparent border-none focus-visible:ring-0 px-2 text-base placeholder:text-slate-500 h-10"
+                        className="flex-1 bg-transparent border-none focus-visible:ring-0 px-2 text-base placeholder:text-slate-400 h-10 text-slate-900"
                     />
                     
                     <div className="flex items-center gap-1">
-                        <Button type="button" size="icon" variant="ghost" className="text-slate-400 hover:text-white shrink-0 h-9 w-9">
+                        <Button type="button" size="icon" variant="ghost" className="text-slate-400 hover:text-slate-600 shrink-0 h-9 w-9">
                             <MicIcon className="w-5 h-5" />
                         </Button>
                         <Button 
@@ -205,7 +205,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     </div>
                 </form>
                 <div className="text-center mt-2">
-                    <p className="text-[10px] text-slate-600">AI Active • Press Enter to send</p>
+                    <p className="text-[10px] text-slate-400">AI Active • Press Enter to send</p>
                 </div>
             </div>
         </div>

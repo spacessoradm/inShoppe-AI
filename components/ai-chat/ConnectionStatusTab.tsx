@@ -250,35 +250,35 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
     webhookStatus
 }) => {
     return (
-        <div className="flex-1 overflow-y-auto p-6 m-0 h-full scrollbar-thin scrollbar-thumb-slate-800">
+        <div className="flex-1 overflow-y-auto p-6 m-0 h-full scrollbar-thin scrollbar-thumb-slate-200">
             <div className="max-w-3xl mx-auto space-y-6">
-                <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
+                <Card className="border border-slate-200 bg-white text-slate-900 shadow-sm">
                     <CardHeader><CardTitle>Webhook Connection</CardTitle><CardDescription>Test connectivity to your Supabase Edge Function.</CardDescription></CardHeader>
                     <CardContent className="space-y-4">
                         <div className="flex gap-2">
-                            <Input readOnly value={webhookUrl || "No URL Configured"} className="bg-slate-950 font-mono text-blue-300" />
-                            <Button onClick={checkWebhookReachability}>Test Ping</Button>
+                            <Input readOnly value={webhookUrl || "No URL Configured"} className="bg-slate-50 font-mono text-blue-600 border-slate-300" />
+                            <Button onClick={checkWebhookReachability} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Test Ping</Button>
                         </div>
-                        <div className="text-sm text-slate-400">
-                            <p>Status: <span className={cn("font-bold", webhookStatus === 'success' ? "text-green-400" : webhookStatus === 'error' ? "text-red-400" : "text-slate-500")}>{webhookStatus}</span></p>
+                        <div className="text-sm text-slate-500">
+                            <p>Status: <span className={cn("font-bold", webhookStatus === 'success' ? "text-green-600" : webhookStatus === 'error' ? "text-red-600" : "text-slate-500")}>{webhookStatus}</span></p>
                         </div>
                     </CardContent>
                 </Card>
                 
-                <Card className="border border-blue-500/30 bg-blue-900/10 text-white">
+                <Card className="border border-blue-200 bg-blue-50 text-slate-900 shadow-sm">
                     <CardHeader>
-                        <CardTitle className="text-blue-300">Required: OpenAI Proxy Function</CardTitle>
-                        <CardDescription>
+                        <CardTitle className="text-blue-700">Required: OpenAI Proxy Function</CardTitle>
+                        <CardDescription className="text-blue-600/70">
                             To fix CORS errors, you MUST deploy this function to Supabase as <code>openai-proxy</code>.
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
-                        <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-green-300 font-mono border border-slate-800 max-h-[300px]"><pre>{OPENAI_PROXY_CODE}</pre></div>
-                        <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(OPENAI_PROXY_CODE)}>Copy Function Code</Button>
+                        <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-green-400 font-mono border border-slate-800 max-h-[300px] shadow-inner"><pre>{OPENAI_PROXY_CODE}</pre></div>
+                        <Button size="sm" className="mt-2 bg-blue-600 hover:bg-blue-500 text-white" onClick={() => navigator.clipboard.writeText(OPENAI_PROXY_CODE)}>Copy Function Code</Button>
                         <div className="mt-2 text-xs text-slate-500">
-                            Deploy command: <code className="bg-slate-800 px-1">supabase functions deploy openai-proxy --no-verify-jwt</code>
+                            Deploy command: <code className="bg-slate-100 px-1 rounded border border-slate-200">supabase functions deploy openai-proxy --no-verify-jwt</code>
                         </div>
-                        <div className="mt-4 text-xs text-slate-400 border-t border-slate-800 pt-2">
+                        <div className="mt-4 text-xs text-slate-500 border-t border-blue-200 pt-2">
                             <strong>Setup API Key:</strong>
                             <br/>
                             Go to Supabase Dashboard &gt; Settings &gt; Edge Functions &gt; Add Secret.
@@ -290,11 +290,11 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
                     </CardContent>
                 </Card>
 
-                <Card className="border border-slate-700/50 bg-slate-900/40 text-white">
+                <Card className="border border-slate-200 bg-white text-slate-900 shadow-sm">
                     <CardHeader><CardTitle>Twilio Webhook Function</CardTitle></CardHeader>
                     <CardContent>
-                        <div className="bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px]"><pre>{EDGE_FUNCTION_CODE}</pre></div>
-                        <Button size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Code</Button>
+                        <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px] shadow-inner"><pre>{EDGE_FUNCTION_CODE}</pre></div>
+                        <Button size="sm" className="mt-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Code</Button>
                     </CardContent>
                 </Card>
             </div>

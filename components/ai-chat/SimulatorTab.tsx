@@ -32,9 +32,9 @@ export const SimulatorTab: React.FC<SimulatorTabProps> = ({
     classifyMessage
 }) => {
     return (
-        <div className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-[#0b101a] h-full">
+        <div className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-slate-50 h-full">
             <div className={cn(
-                "flex-col border-r border-slate-800 bg-slate-900/30 transition-all",
+                "flex-col border-r border-slate-200 bg-white transition-all",
                 selectedPhone ? "hidden md:flex w-[320px]" : "flex w-full md:w-[320px]"
             )}>
                 <ChatList 
@@ -46,7 +46,7 @@ export const SimulatorTab: React.FC<SimulatorTabProps> = ({
                 />
             </div>
             <div className={cn(
-                "flex-col bg-[#0b101a] relative transition-all",
+                "flex-col bg-slate-50 relative transition-all",
                 selectedPhone ? "flex flex-1" : "hidden md:flex flex-1"
             )}>
                 <ChatWindow 

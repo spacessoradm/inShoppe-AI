@@ -29,20 +29,20 @@ export const ChatList: React.FC<ChatListProps> = ({
   });
 
   return (
-    <div className={cn("flex flex-col h-full bg-slate-950/50", className)}>
+    <div className={cn("flex flex-col h-full bg-white border-r border-slate-200", className)}>
       <div className="p-4 pb-2">
         <div className="relative">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <Input 
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
                 placeholder="Search" 
-                className="pl-9 bg-slate-900 border-transparent rounded-2xl h-10 text-slate-200 placeholder:text-slate-500 focus-visible:ring-indigo-500/50" 
+                className="pl-9 bg-slate-50 border-slate-200 rounded-2xl h-10 text-slate-900 placeholder:text-slate-400 focus-visible:ring-indigo-500/50" 
             />
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 scrollbar-thin scrollbar-thumb-slate-800">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 scrollbar-thin scrollbar-thumb-slate-200">
         {filteredChats.map(([phone, msgs]) => {
             const lastMsg = msgs[msgs.length - 1];
             const isSelected = selectedPhone === phone;
@@ -56,16 +56,16 @@ export const ChatList: React.FC<ChatListProps> = ({
                     className={cn(
                         "group relative flex items-start gap-3 p-4 rounded-[20px] cursor-pointer transition-all duration-200",
                         isSelected 
-                            ? "bg-slate-900 shadow-xl shadow-black/20" 
-                            : "hover:bg-slate-900/50"
+                            ? "bg-slate-100 border border-slate-200/50" 
+                            : "hover:bg-slate-50 border border-transparent"
                     )}
                 >
                     {/* Avatar */}
                     <div className={cn(
                         "w-12 h-12 rounded-2xl flex items-center justify-center text-lg font-bold shrink-0 transition-colors",
                         isSelected 
-                            ? "bg-slate-800 text-white" 
-                            : "bg-slate-800/50 text-slate-400 group-hover:bg-slate-800 group-hover:text-slate-200"
+                            ? "bg-white text-indigo-600 border border-slate-200 shadow-sm" 
+                            : "bg-slate-100 text-slate-500 group-hover:bg-white group-hover:shadow-sm"
                     )}>
                         {phone.slice(1, 3)}
                     </div>
@@ -74,18 +74,18 @@ export const ChatList: React.FC<ChatListProps> = ({
                         <div className="flex justify-between items-baseline mb-1">
                             <span className={cn(
                                 "font-bold text-[15px] truncate",
-                                isSelected ? "text-white" : "text-slate-200"
+                                isSelected ? "text-slate-900" : "text-slate-700"
                             )}>
                                 {phone}
                             </span>
-                            <span className="text-xs text-slate-500 shrink-0 ml-2">{time}</span>
+                            <span className="text-xs text-slate-400 shrink-0 ml-2">{time}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <p className={cn(
                                 "text-sm truncate pr-2 leading-relaxed",
-                                isSelected ? "text-slate-400" : "text-slate-500"
+                                isSelected ? "text-slate-600" : "text-slate-500"
                             )}>
-                                {lastMsg.direction === 'outbound' && <span className="text-indigo-400 mr-1">You:</span>}
+                                {lastMsg.direction === 'outbound' && <span className="text-indigo-600 mr-1 font-medium">You:</span>}
                                 {lastMsg.text}
                             </p>
                             {lastMsg.intent_tag && (
@@ -98,7 +98,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     </div>
                     
                     {isSelected && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 bg-indigo-500 rounded-r-full"></div>
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 bg-indigo-600 rounded-r-full"></div>
                     )}
                 </div>
             );

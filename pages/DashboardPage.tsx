@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -64,16 +65,16 @@ const recentActivities = [
 
 const DashboardPage: React.FC = () => {
     return (
-        <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+        <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent bg-slate-50">
             <div className="space-y-6 max-w-[1600px] mx-auto">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
-                        <h1 className="text-3xl font-bold tracking-tight text-white">Dashboard</h1>
-                        <p className="text-slate-400">Welcome back! Here's what's happening today.</p>
+                        <h1 className="text-3xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+                        <p className="text-slate-500">Welcome back! Here's what's happening today.</p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" className="flex items-center gap-2 border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white">
-                            <CalendarIcon className="h-4 w-4" />
+                        <Button variant="outline" size="sm" className="flex items-center gap-2 border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
+                            <CalendarIcon className="h-4 w-4 text-slate-500" />
                             <span>This Month</span>
                         </Button>
                     </div>
@@ -82,19 +83,19 @@ const DashboardPage: React.FC = () => {
                 {/* KPI Cards */}
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
                     {kpiData.map((kpi) => (
-                        <Card key={kpi.title} className="relative overflow-hidden border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl shadow-xl transition-all hover:scale-[1.02] hover:bg-slate-800/50 group">
+                        <Card key={kpi.title} className="relative overflow-hidden border border-slate-200 bg-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md group">
                             <div className={cn("absolute top-0 right-0 w-24 h-24 rounded-bl-full opacity-10 transition-opacity group-hover:opacity-20 bg-gradient-to-br", kpi.color)}></div>
                             <CardHeader className="flex flex-row items-center justify-between pb-2">
-                                <CardTitle className="text-sm font-medium text-slate-400 uppercase tracking-wider">{kpi.title}</CardTitle>
-                                <div className={cn("p-2 rounded-lg bg-gradient-to-br shadow-inner", kpi.color)}>
+                                <CardTitle className="text-sm font-medium text-slate-500 uppercase tracking-wider">{kpi.title}</CardTitle>
+                                <div className={cn("p-2 rounded-lg bg-gradient-to-br shadow-sm", kpi.color)}>
                                     <kpi.icon className="h-4 w-4 text-white" />
                                 </div>
                             </CardHeader>
                             <CardContent>
-                                <div className="text-3xl font-bold text-white mb-1">{kpi.value}</div>
-                                <p className={cn("text-xs font-semibold flex items-center gap-1", kpi.changeType === 'increase' ? 'text-emerald-400' : 'text-rose-400')}>
+                                <div className="text-3xl font-bold text-slate-900 mb-1">{kpi.value}</div>
+                                <p className={cn("text-xs font-semibold flex items-center gap-1", kpi.changeType === 'increase' ? 'text-emerald-600' : 'text-rose-600')}>
                                     {kpi.changeType === 'increase' ? '↑' : '↓'} {kpi.change} 
-                                    <span className="text-slate-500 font-normal ml-1">vs last month</span>
+                                    <span className="text-slate-400 font-normal ml-1">vs last month</span>
                                 </p>
                             </CardContent>
                         </Card>
@@ -104,10 +105,10 @@ const DashboardPage: React.FC = () => {
                 {/* Main Content Grid */}
                 <div className="grid gap-6 lg:grid-cols-7">
                     {/* Sales Overview Chart (Left Column - Wider) */}
-                    <Card className="lg:col-span-4 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white shadow-xl">
+                    <Card className="lg:col-span-4 border border-slate-200 bg-white shadow-sm">
                         <CardHeader>
-                            <CardTitle className="text-xl">Sales Overview</CardTitle>
-                            <CardDescription className="text-slate-400">Revenue performance over the last 6 months.</CardDescription>
+                            <CardTitle className="text-xl text-slate-900">Sales Overview</CardTitle>
+                            <CardDescription className="text-slate-500">Revenue performance over the last 6 months.</CardDescription>
                         </CardHeader>
                         <CardContent className="pl-0">
                         <BarChart data={salesData} />
@@ -115,10 +116,10 @@ const DashboardPage: React.FC = () => {
                     </Card>
 
                     {/* Lead Source Breakdown (Right Column - Narrower) */}
-                    <Card className="lg:col-span-3 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white shadow-xl flex flex-col">
+                    <Card className="lg:col-span-3 border border-slate-200 bg-white shadow-sm flex flex-col">
                         <CardHeader>
-                            <CardTitle className="text-xl">Lead Sources</CardTitle>
-                            <CardDescription className="text-slate-400">Traffic distribution by channel.</CardDescription>
+                            <CardTitle className="text-xl text-slate-900">Lead Sources</CardTitle>
+                            <CardDescription className="text-slate-500">Traffic distribution by channel.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6 flex-1">
                             {leadSources.map(source => {
@@ -129,11 +130,11 @@ const DashboardPage: React.FC = () => {
                                         <div className="flex justify-between items-center mb-2">
                                             <div className="flex items-center gap-2">
                                                 <div className={cn("w-3 h-3 rounded-full shadow-sm", source.color)}></div>
-                                                <span className="text-sm font-medium text-slate-200 group-hover:text-white transition-colors">{source.source}</span>
+                                                <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">{source.source}</span>
                                             </div>
-                                            <span className="text-sm font-bold text-slate-300">{source.value} leads</span>
+                                            <span className="text-sm font-bold text-slate-700">{source.value} leads</span>
                                         </div>
-                                        <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+                                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                                             <div className={cn("h-full rounded-full transition-all duration-1000 ease-out", source.color)} style={{ width: `${percentage}%` }}></div>
                                         </div>
                                     </div>
@@ -143,30 +144,30 @@ const DashboardPage: React.FC = () => {
                     </Card>
 
                     {/* Recent Activities (Full Width) */}
-                    <Card className="lg:col-span-7 border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white shadow-xl">
+                    <Card className="lg:col-span-7 border border-slate-200 bg-white shadow-sm">
                         <CardHeader className="flex flex-row items-center justify-between">
                             <div>
-                                <CardTitle className="text-xl">Recent Activity</CardTitle>
-                                <CardDescription className="text-slate-400">Latest actions from your team and customers.</CardDescription>
+                                <CardTitle className="text-xl text-slate-900">Recent Activity</CardTitle>
+                                <CardDescription className="text-slate-500">Latest actions from your team and customers.</CardDescription>
                             </div>
-                            <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white">View All</Button>
+                            <Button variant="ghost" size="sm" className="text-slate-500 hover:text-slate-900 hover:bg-slate-50">View All</Button>
                         </CardHeader>
                         <CardContent>
                             <div className="space-y-4">
                                 {recentActivities.map((activity, i) => (
-                                    <div key={i} className="flex items-start gap-4 p-3 rounded-xl hover:bg-slate-800/50 transition-colors border border-transparent hover:border-slate-700/50">
+                                    <div key={i} className="flex items-start gap-4 p-3 rounded-xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100">
                                         <div className="relative">
-                                            <img src={activity.avatar} alt={activity.name} className="w-10 h-10 rounded-full border border-slate-600"/>
-                                            <div className={cn("absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-slate-900", 
+                                            <img src={activity.avatar} alt={activity.name} className="w-10 h-10 rounded-full border border-slate-200 shadow-sm"/>
+                                            <div className={cn("absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white", 
                                                 activity.status === 'success' ? 'bg-emerald-500' : 
                                                 activity.status === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
                                             )}></div>
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-semibold text-white">{activity.name}</p>
-                                            <p className="text-sm text-slate-400 line-clamp-1">{activity.message}</p>
+                                            <p className="text-sm font-semibold text-slate-900">{activity.name}</p>
+                                            <p className="text-sm text-slate-500 line-clamp-1">{activity.message}</p>
                                         </div>
-                                        <span className="text-xs text-slate-500 whitespace-nowrap font-medium">{activity.time}</span>
+                                        <span className="text-xs text-slate-400 whitespace-nowrap font-medium">{activity.time}</span>
                                     </div>
                                 ))}
                             </div>
@@ -193,7 +194,7 @@ const BarChart = ({ data }: { data: { name: string, sales: number }[] }) => {
         {/* Y-axis lines */}
         {[...Array(5)].map((_, i) => (
           <g key={i}>
-            <line x1="0" x2="100%" y1={260 - i * 60} y2={260 - i * 60} stroke="#334155" strokeWidth="1" strokeDasharray="4,4" />
+            <line x1="0" x2="100%" y1={260 - i * 60} y2={260 - i * 60} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4,4" />
             <text x="-10" y={265 - i * 60} textAnchor="end" fontSize="10" fill="#94a3b8">
               {((maxValue / 4) * i).toFixed(0)}
             </text>
@@ -203,21 +204,19 @@ const BarChart = ({ data }: { data: { name: string, sales: number }[] }) => {
         {/* Bars and X-axis labels */}
         {data.map((d, i) => {
           const barHeight = (d.sales / maxValue) * 240;
-          // Calculate X position specifically for the viewBox 0 0 500 300
           const slotWidth = 500 / data.length;
           const barWidth = 40;
           const x = (i * slotWidth) + (slotWidth - barWidth) / 2;
           
           return (
             <g key={d.name} className="group">
-              {/* Hover effect background */}
               <rect
                  x={i * slotWidth}
                  y="0"
                  width={slotWidth}
                  height="300"
                  fill="transparent"
-                 className="hover:fill-slate-800/30 transition-colors"
+                 className="hover:fill-slate-50 transition-colors"
               />
               <rect
                 x={x}
@@ -226,9 +225,9 @@ const BarChart = ({ data }: { data: { name: string, sales: number }[] }) => {
                 height={barHeight}
                 rx="6"
                 fill="url(#barGradient)"
-                className="transition-all duration-300 group-hover:brightness-110 group-hover:-translate-y-1 drop-shadow-lg"
+                className="transition-all duration-300 group-hover:brightness-110 group-hover:-translate-y-1 drop-shadow-md"
               />
-              <text x={x + barWidth / 2} y="285" textAnchor="middle" fontSize="12" fontWeight="500" fill="#cbd5e1">
+              <text x={x + barWidth / 2} y="285" textAnchor="middle" fontSize="12" fontWeight="500" fill="#64748b">
                 {d.name}
               </text>
             </g>

@@ -770,23 +770,23 @@ const AIChatPage: React.FC = () => {
 
     if (mode === 'landing') {
         return (
-            <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-slate-950/50">
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-slate-50">
                 <div className="w-full max-w-lg space-y-8 animate-fadeInUp">
                     <div className="flex justify-center">
-                        <div className="w-24 h-24 bg-gradient-to-tr from-slate-800 to-slate-900 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-900/20 border border-slate-700">
-                             <ChatIcon className="w-12 h-12 text-blue-400" />
+                        <div className="w-24 h-24 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-500/20 border border-slate-200">
+                             <ChatIcon className="w-12 h-12 text-white" />
                         </div>
                     </div>
                     <div className="space-y-4">
-                        <h2 className="text-4xl font-bold text-white tracking-tight">WhatsApp AI Integration</h2>
-                        <p className="text-slate-400 text-lg leading-relaxed">
+                        <h2 className="text-4xl font-bold text-slate-900 tracking-tight">WhatsApp AI Integration</h2>
+                        <p className="text-slate-500 text-lg leading-relaxed">
                             Connect your Twilio account to enable the AI Action Engine. 
                         </p>
                     </div>
                     <div className="pt-4 flex flex-col gap-4 items-center">
                         <Button 
                             size="lg" 
-                            className="bg-blue-600 hover:bg-blue-500 text-white px-10 h-12 text-base shadow-lg shadow-blue-900/40 w-full sm:w-auto" 
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-10 h-12 text-base shadow-lg shadow-blue-500/40 w-full sm:w-auto" 
                             onClick={() => setMode('setup')}
                         >
                             Connect WhatsApp
@@ -799,52 +799,52 @@ const AIChatPage: React.FC = () => {
 
     if (mode === 'setup') {
         return (
-            <div className="h-full overflow-y-auto p-4 lg:p-6 bg-slate-950/50">
+            <div className="h-full overflow-y-auto p-4 lg:p-6 bg-slate-50">
                 <div className="max-w-3xl mx-auto space-y-6 animate-fadeInUp">
                     <div className="flex items-center justify-between">
                         <div>
-                            <h1 className="text-3xl font-bold text-white">Twilio Configuration</h1>
-                            <p className="text-slate-400">Enter your credentials to link your number.</p>
+                            <h1 className="text-3xl font-bold text-slate-900">Twilio Configuration</h1>
+                            <p className="text-slate-500">Enter your credentials to link your number.</p>
                         </div>
-                        <Button variant="ghost" onClick={() => setMode('landing')} className="text-slate-400 hover:text-white">
+                        <Button variant="ghost" onClick={() => setMode('landing')} className="text-slate-500 hover:text-slate-900">
                             Cancel
                         </Button>
                     </div>
-                    <Card className="border border-slate-700/50 bg-slate-900/40 backdrop-blur-xl text-white">
+                    <Card className="border border-slate-200 bg-white text-slate-900 shadow-sm">
                         <form onSubmit={handleSaveConfig}>
                             <CardHeader>
                                 <CardTitle>Connection Details</CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-6">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold text-[#8A9A5B]">API Key</label>
-                                    <Input value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-950/50 border-[#8A9A5B]/50 font-mono" placeholder="OpenAI API Key (Optional if set in Backend Secrets)" type="password" />
+                                    <label className="text-sm font-bold text-blue-600">API Key</label>
+                                    <Input value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="OpenAI API Key (Optional if set in Backend Secrets)" type="password" />
                                     <p className="text-xs text-slate-500">
                                         Note: We recommend setting <code>OPENAI_API_KEY</code> in Supabase Secrets for production.
                                     </p>
                                 </div>
-                                <div className="border-t border-slate-800 my-4"></div>
+                                <div className="border-t border-slate-200 my-4"></div>
                                 <div className="grid md:grid-cols-2 gap-6">
                                     <div className="space-y-2">
                                         <label className="text-sm font-medium">Account SID</label>
-                                        <Input required value={accountSid} onChange={e => setAccountSid(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" placeholder="AC..." />
+                                        <Input required value={accountSid} onChange={e => setAccountSid(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="AC..." />
                                     </div>
                                     <div className="space-y-2">
                                         <label className="text-sm font-medium">Auth Token</label>
-                                        <Input type="password" required value={authToken} onChange={e => setAuthToken(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" placeholder="Token..." />
+                                        <Input type="password" required value={authToken} onChange={e => setAuthToken(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="Token..." />
                                     </div>
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">Your Twilio Phone Number</label>
-                                    <Input required value={myPhoneNumber} onChange={e => setMyPhoneNumber(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono text-blue-300" placeholder="+1234567890" />
+                                    <Input required value={myPhoneNumber} onChange={e => setMyPhoneNumber(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-blue-600" placeholder="+1234567890" />
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">Webhook URL</label>
-                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-950/50 border-slate-700 font-mono" placeholder="https://..." />
+                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="https://..." />
                                 </div>
-                                <div className="space-y-2 pt-4 border-t border-slate-800">
+                                <div className="space-y-2 pt-4 border-t border-slate-200">
                                     <label className="text-sm font-medium">System Instructions</label>
-                                    <textarea className="w-full bg-slate-950/50 border border-slate-700 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} placeholder="You are a helpful assistant..." />
+                                    <textarea className="w-full bg-slate-50 border border-slate-300 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500 text-slate-900" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} placeholder="You are a helpful assistant..." />
                                 </div>
                             </CardContent>
                             <CardFooter>
@@ -860,14 +860,14 @@ const AIChatPage: React.FC = () => {
     }
 
     return (
-        <div className="h-full flex flex-col overflow-hidden bg-slate-950 relative">
+        <div className="h-full flex flex-col overflow-hidden bg-slate-50 relative">
             {/* Toast Notification - Updated positioning and z-index */}
             {notification && (
                 <div className={cn(
                     "fixed top-20 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg border text-sm font-medium animate-fadeInUp flex items-center gap-2",
-                    notification.type === 'success' ? "bg-green-900/90 border-green-700 text-white" :
-                    notification.type === 'error' ? "bg-red-900/90 border-red-700 text-white" :
-                    "bg-blue-900/90 border-blue-700 text-white"
+                    notification.type === 'success' ? "bg-green-100 border-green-200 text-green-800" :
+                    notification.type === 'error' ? "bg-red-100 border-red-200 text-red-800" :
+                    "bg-blue-100 border-blue-200 text-blue-800"
                 )}>
                     {notification.type === 'success' && <CheckIcon className="w-4 h-4" />}
                     {notification.type === 'error' && <AlertCircleIcon className="w-4 h-4" />}
@@ -876,22 +876,22 @@ const AIChatPage: React.FC = () => {
                 </div>
             )}
 
-            <header className="border-b border-slate-800 bg-slate-900/50 p-4 flex justify-between items-center shrink-0">
+            <header className="border-b border-slate-200 bg-white/80 p-4 flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-3">
-                    <div className="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></div>
-                    <h1 className="font-bold text-white tracking-wide">AI Action Engine</h1>
-                    <Badge variant="outline" className="text-xs border-slate-700 text-slate-400 hidden sm:inline-flex">
+                    <div className="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]"></div>
+                    <h1 className="font-bold text-slate-900 tracking-wide">AI Action Engine</h1>
+                    <Badge variant="outline" className="text-xs border-slate-300 text-slate-500 hidden sm:inline-flex bg-slate-50">
                         {webhookUrl ? 'Live Backend' : 'Simulator Mode'}
                     </Badge>
                 </div>
                 <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
-                        <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Credits</div>
-                        <div className={cn("text-sm font-mono font-bold", organization ? ((organization.credits > 0) ? "text-green-400" : "text-red-400") : "text-slate-400")}>
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Credits</div>
+                        <div className={cn("text-sm font-mono font-bold", organization ? ((organization.credits > 0) ? "text-green-600" : "text-red-600") : "text-slate-400")}>
                             {organization ? organization.credits : <span className="animate-pulse">...</span>}
                         </div>
                     </div>
-                    <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:text-white" onClick={() => setMode('setup')}>
+                    <Button size="sm" variant="outline" className="border-slate-300 text-slate-600 hover:text-slate-900 hover:bg-slate-100" onClick={() => setMode('setup')}>
                         Config
                     </Button>
                 </div>
@@ -899,36 +899,36 @@ const AIChatPage: React.FC = () => {
 
             <div className="flex-1 overflow-hidden">
                 <Tabs defaultValue="chat" className="h-full flex flex-col">
-                    <div className="px-6 pt-2 bg-[#0b101a] border-b border-slate-800 shrink-0">
+                    <div className="px-6 pt-2 bg-white border-b border-slate-200 shrink-0">
                          <TabsList className="bg-transparent h-12 gap-6 p-0">
                             <TabsTrigger 
                                 value="chat" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
                             >
                                 Live Chats
                             </TabsTrigger>
                             <TabsTrigger 
                                 value="knowledge" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
                             >
                                 Knowledge Base (RAG)
                             </TabsTrigger>
                             <TabsTrigger 
                                 value="status" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
                             >
                                 Connection Status
                             </TabsTrigger>
                             <TabsTrigger 
                                 value="logs" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-400 hover:text-slate-200 data-[state=active]:border-blue-500 data-[state=active]:text-white transition-all data-[state=active]:bg-transparent"
+                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
                             >
                                 System Logs
                             </TabsTrigger>
                         </TabsList>
                     </div>
 
-                    <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-[#0b101a]">
+                    <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-slate-50">
                         <SimulatorTab 
                             chats={chats}
                             selectedPhone={selectedPhone}
@@ -944,7 +944,7 @@ const AIChatPage: React.FC = () => {
                         />
                     </TabsContent>
 
-                    <TabsContent value="knowledge" className="flex-1 overflow-y-auto p-6 m-0">
+                    <TabsContent value="knowledge" className="flex-1 overflow-y-auto p-6 m-0 bg-slate-50">
                         <KnowledgeBaseTab 
                             urlInput={urlInput}
                             setUrlInput={setUrlInput}
@@ -960,7 +960,7 @@ const AIChatPage: React.FC = () => {
                         />
                      </TabsContent>
 
-                    <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0">
+                    <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0 bg-slate-50">
                         <ConnectionStatusTab 
                             webhookUrl={webhookUrl}
                             checkWebhookReachability={checkWebhookReachability}

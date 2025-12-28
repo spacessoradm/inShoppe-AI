@@ -26,33 +26,33 @@ const ConsoleLayout: React.FC = () => {
   const userInitial = userName.charAt(0).toUpperCase();
 
   return (
-    <div className="grid h-screen w-full md:grid-cols-[260px_1fr] overflow-hidden bg-slate-950">
+    <div className="grid h-screen w-full md:grid-cols-[260px_1fr] overflow-hidden bg-slate-50 text-slate-900">
       {/* Sidebar */}
-      <aside className="hidden flex-col border-r border-slate-800 bg-[#0b101a] md:flex">
+      <aside className="hidden flex-col border-r border-slate-200 bg-white md:flex shadow-sm z-20">
         
         {/* Top: Organization Info */}
         <div className="p-4 pb-2">
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/50 border border-slate-800/50 hover:bg-slate-900 hover:border-slate-700 transition-all cursor-pointer group">
-                <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-lg shadow-blue-900/20 shrink-0">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100 hover:bg-slate-100 hover:border-slate-200 transition-all cursor-pointer group">
+                <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-md shadow-blue-500/20 shrink-0">
                     <BuildingIcon className="h-5 w-5 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-sm text-white truncate">{orgName}</h3>
+                    <h3 className="font-semibold text-sm text-slate-900 truncate">{orgName}</h3>
                     <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-slate-400 font-medium">{plan} Plan</span>
+                        <span className="text-[10px] text-slate-500 font-medium">{plan} Plan</span>
                         {organization?.subscription_status === 'active' && <span className="h-1.5 w-1.5 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]"></span>}
                     </div>
                 </div>
-                <ChevronRightIcon className="h-4 w-4 text-slate-600 group-hover:text-slate-400" />
+                <ChevronRightIcon className="h-4 w-4 text-slate-400 group-hover:text-slate-600" />
             </div>
         </div>
 
         {/* Navigation */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-800">
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-200">
           
           {/* Main Group */}
           <div className="space-y-1">
-            <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Platform</p>
+            <p className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Platform</p>
             <NavItem to="/console/dashboard" icon={HomeIcon} label="Dashboard" />
             <NavItem to="/console/crm" icon={BriefcaseIcon} label="CRM & Leads" />
             <NavItem to="/console/ai-chat" icon={BotIcon} label="AI Agent" />
@@ -60,22 +60,22 @@ const ConsoleLayout: React.FC = () => {
 
           {/* Configuration Group */}
           <div className="space-y-1">
-             <p className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Configuration</p>
+             <p className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Configuration</p>
              <NavItem to="/console/settings" icon={SettingsIcon} label="Settings" />
           </div>
         </div>
 
         {/* Bottom: User Profile */}
-        <div className="p-4 border-t border-slate-800 bg-[#0b101a]">
-            <div className="flex items-center gap-3 p-2 rounded-xl transition-colors hover:bg-slate-900 group">
-                <div className="h-9 w-9 rounded-full bg-slate-800 flex items-center justify-center text-sm font-bold text-slate-300 border border-slate-700">
+        <div className="p-4 border-t border-slate-100 bg-white">
+            <div className="flex items-center gap-3 p-2 rounded-xl transition-colors hover:bg-slate-50 group">
+                <div className="h-9 w-9 rounded-full bg-slate-100 flex items-center justify-center text-sm font-bold text-slate-600 border border-slate-200">
                     {userInitial}
                 </div>
                 <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{userName}</p>
+                    <p className="text-sm font-medium text-slate-900 truncate">{userName}</p>
                     <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
                 </div>
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-red-400 hover:bg-slate-800" onClick={handleSignOut} title="Sign Out">
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50" onClick={handleSignOut} title="Sign Out">
                     <LogOutIcon className="h-4 w-4" />
                 </Button>
             </div>
@@ -83,46 +83,38 @@ const ConsoleLayout: React.FC = () => {
             {/* Profile Completion Bar */}
             <div className="mt-3 px-1">
                 <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] text-slate-500">Profile Setup</span>
-                    <span className="text-[10px] text-slate-400">70%</span>
+                    <span className="text-[10px] text-slate-400">Profile Setup</span>
+                    <span className="text-[10px] text-slate-500 font-medium">70%</span>
                 </div>
-                <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-green-500 w-[70%] rounded-full shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
+                <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-500 w-[70%] rounded-full shadow-[0_0_6px_rgba(34,197,94,0.4)]"></div>
                 </div>
             </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex flex-col h-full overflow-hidden relative">
+      <div className="flex flex-col h-full overflow-hidden relative bg-slate-50">
         {/* Simplified Header */}
-        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md px-6 z-20 justify-between md:justify-end">
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-slate-200 bg-white/80 backdrop-blur-md px-6 z-20 justify-between md:justify-end">
            {/* Mobile Toggle Placeholder (Hidden on Desktop) */}
-           <div className="md:hidden flex items-center gap-2 font-bold text-white">
+           <div className="md:hidden flex items-center gap-2 font-bold text-slate-900">
               <MessageSquare className="h-6 w-6 text-primary" />
               inShoppe AI
            </div>
 
            {/* Right side header items (e.g. notifications) */}
            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="icon" className="text-slate-400 hover:text-white">
+              <Button variant="ghost" size="icon" className="text-slate-500 hover:text-slate-900 hover:bg-slate-100 relative">
                   <BellIcon className="h-5 w-5" />
-                  <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full"></span>
+                  <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
               </Button>
            </div>
         </header>
 
-        {/* Dynamic Background Area */}
-        <main className="flex-1 overflow-hidden relative bg-slate-950">
-             {/* Decorative Background Elements */}
-             <div className="absolute inset-0 z-0 pointer-events-none bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black opacity-80"></div>
-             <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-blue-600/5 blur-[100px] pointer-events-none"></div>
-             <div className="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full bg-purple-600/5 blur-[100px] pointer-events-none"></div>
-             
-             {/* Content Layer */}
-             <div className="relative z-10 h-full w-full">
-                <Outlet />
-             </div>
+        {/* Content Layer */}
+        <main className="flex-1 overflow-hidden relative z-10 h-full w-full">
+            <Outlet />
         </main>
       </div>
     </div>
@@ -136,11 +128,11 @@ const NavItem = ({ to, icon: Icon, label }: { to: string, icon: any, label: stri
         className={({ isActive }) => cn(
         "flex items-center gap-3 rounded-lg px-3 py-2 transition-all text-sm font-medium",
         isActive 
-            ? "bg-slate-800 text-white shadow-sm ring-1 ring-slate-700/50" 
-            : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+            ? "bg-slate-100 text-slate-900 shadow-sm border border-slate-200/50" 
+            : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
         )}
     >
-        <Icon className="h-4 w-4" />
+        <Icon className={({ isActive }: any) => cn("h-4 w-4", isActive ? "text-blue-600" : "text-slate-400")} />
         {label}
     </NavLink>
 );
