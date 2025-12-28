@@ -56,4 +56,6 @@ export interface Lead {
   tags?: string[];
   created_at: string;
   last_contacted_at?: string;
+  ai_score?: number; // 0 to 100
+  ai_analysis?: string; // Short reason
 }

@@ -163,7 +163,66 @@ export const generateStrategicResponse = async (
     }
 };
 
-// --- 3. MAIN PIPELINE (OPTIMIZED) ---
+// --- 3. LEAD SCORING ---
+export const analyzeLeadPotential = async (
+    chatHistory: { role: string, content: string }[],
+    apiKey?: string
+): Promise<{ score: number, analysis: string }> => {
+    try {
+        const systemPrompt = `
+            You are a Sales Manager AI.
+            Your job is to analyze a conversation transcript and Score the Lead based on "Purchase Intent".
+            
+            SCORING CRITERIA (0-100):
+            - 90-100: Ready to buy/book immediately. Explicitly asking for payment link or appointment.
+            - 70-89: High interest. Asking specific questions about price, location, specs. Engaged.
+            - 40-69: Moderate. Just browsing, asking general questions.
+            - 0-39: Low. Unresponsive, complaining, or wrong number.
+
+            INPUT:
+            Conversation History.
+
+            OUTPUT JSON:
+            {
+                "score": number, // 0 to 100
+                "analysis": "Short 1-sentence reason"
+            }
+        `;
+
+        // If no history, default score
+        if (!chatHistory || chatHistory.length === 0) {
+            return { score: 0, analysis: "No conversation history found." };
+        }
+
+        // Limit history to last 15 messages to save tokens but keep context
+        const recentHistory = chatHistory.slice(-15);
+
+        const response = await invokeAI('chat', {
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: JSON.stringify(recentHistory) }
+            ],
+            temperature: 0.3, // Lower temp for more consistent scoring
+            response_format: { type: "json_object" }
+        }, apiKey);
+
+        const content = response.choices[0]?.message?.content;
+        if (!content) throw new Error("Empty analysis from AI");
+
+        const parsed = JSON.parse(content);
+        return {
+            score: parsed.score || 0,
+            analysis: parsed.analysis || "Analysis failed."
+        };
+
+    } catch (error) {
+        console.error("Lead scoring failed:", error);
+        return { score: 0, analysis: "AI Analysis currently unavailable." };
+    }
+};
+
+// --- 4. MAIN PIPELINE (OPTIMIZED) ---
 export const processIncomingMessage = async (
     userMessage: string,
     userId: string, // Kept for interface compatibility, mostly unused now in favor of orgId

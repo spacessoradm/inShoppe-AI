@@ -16,6 +16,7 @@ interface SimulatorTabProps {
     aiStatus: string;
     handleSimulatorSend: (text: string) => void;
     classifyMessage: (msgId: string, text: string) => void;
+    phoneToNameMap?: Record<string, string>;
 }
 
 export const SimulatorTab: React.FC<SimulatorTabProps> = ({
@@ -29,7 +30,8 @@ export const SimulatorTab: React.FC<SimulatorTabProps> = ({
     setInput,
     aiStatus,
     handleSimulatorSend,
-    classifyMessage
+    classifyMessage,
+    phoneToNameMap = {}
 }) => {
     return (
         <div className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-slate-50 h-full">
@@ -43,6 +45,7 @@ export const SimulatorTab: React.FC<SimulatorTabProps> = ({
                     onSelect={setSelectedPhone}
                     searchQuery={searchQuery}
                     onSearchChange={setSearchQuery}
+                    phoneToNameMap={phoneToNameMap}
                 />
             </div>
             <div className={cn(
@@ -58,6 +61,7 @@ export const SimulatorTab: React.FC<SimulatorTabProps> = ({
                     aiStatus={aiStatus}
                     onBack={() => setSelectedPhone(null)}
                     onAnalyze={classifyMessage}
+                    phoneToNameMap={phoneToNameMap}
                 />
             </div>
         </div>

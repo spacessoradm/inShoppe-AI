@@ -79,8 +79,21 @@ create table if not exists leads (
   deal_value numeric,
   tags text[],
   last_contacted_at timestamptz,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  ai_score int default 0,
+  ai_analysis text
 );
+
+-- SAFETY: Add AI columns to leads if missing
+do $$
+begin
+  if not exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'ai_score') then
+    alter table leads add column ai_score int default 0;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'ai_analysis') then
+    alter table leads add column ai_analysis text;
+  end if;
+end $$;
 
 -- 6. Create Early Access Signups Table
 create table if not exists early_access_signups (

@@ -23,6 +23,7 @@ interface ChatWindowProps {
     aiStatus: string;
     onBack: () => void;
     onAnalyze: (msgId: string, text: string) => void;
+    phoneToNameMap?: Record<string, string>;
 }
 
 export const ChatWindow: React.FC<ChatWindowProps> = ({ 
@@ -33,7 +34,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     setInput, 
     aiStatus,
     onBack,
-    onAnalyze
+    onAnalyze,
+    phoneToNameMap = {}
 }) => {
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -60,6 +62,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         );
     }
 
+    const displayName = phoneToNameMap[selectedPhone] || selectedPhone;
+    const hasName = !!phoneToNameMap[selectedPhone];
+
     return (
         <div className="flex flex-col h-full bg-slate-50 relative">
             {/* Header */}
@@ -74,10 +79,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         <ArrowLeftIcon className="w-6 h-6" />
                     </Button>
                     <div>
-                        <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{selectedPhone}</h2>
+                        <h2 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                            {displayName}
+                            {hasName && <span className="text-xs font-normal text-slate-400">({selectedPhone})</span>}
+                        </h2>
                         <div className="flex items-center gap-2 mt-1">
                             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                            <span className="text-sm text-slate-500">10 online</span>
+                            <span className="text-sm text-slate-500">Online</span>
                             {aiStatus && (
                                 <Badge variant="outline" className="ml-2 border-indigo-200 text-indigo-600 bg-indigo-50 text-[10px] uppercase tracking-wider">
                                     {aiStatus}
@@ -117,14 +125,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         >
                             {!isAgent && (
                                 <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center text-xs font-bold text-slate-600 shrink-0 mt-1">
-                                    {selectedPhone.slice(1,3)}
+                                    {displayName.slice(0, 2).toUpperCase()}
                                 </div>
                             )}
 
                             <div className={cn("flex flex-col max-w-[70%] sm:max-w-[60%]", isAgent ? "items-end" : "items-start")}>
                                 <div className="flex items-baseline gap-2 mb-1 px-1">
                                     <span className={cn("text-sm font-bold", isAgent ? "text-indigo-600" : "text-slate-600")}>
-                                        {msg.sender === 'system' ? 'System' : (isAgent ? "InShoppe AI" : selectedPhone)}
+                                        {msg.sender === 'system' ? 'System' : (isAgent ? "InShoppe AI" : displayName)}
                                     </span>
                                     {/* Intent Tag for Customer Messages */}
                                     {!isAgent && msg.intent_tag && (

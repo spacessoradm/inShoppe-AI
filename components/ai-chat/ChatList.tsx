@@ -11,6 +11,7 @@ interface ChatListProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   className?: string;
+  phoneToNameMap?: Record<string, string>;
 }
 
 export const ChatList: React.FC<ChatListProps> = ({ 
@@ -19,13 +20,20 @@ export const ChatList: React.FC<ChatListProps> = ({
   onSelect, 
   searchQuery, 
   onSearchChange,
-  className 
+  className,
+  phoneToNameMap = {}
 }) => {
   
   const filteredChats = chats.filter(([phone, msgs]) => {
+      const name = phoneToNameMap[phone] || '';
       const lastMsg = msgs[msgs.length - 1];
       const content = lastMsg.text.toLowerCase();
-      return phone.includes(searchQuery) || content.includes(searchQuery.toLowerCase());
+      
+      const matchPhone = phone.includes(searchQuery);
+      const matchName = name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchContent = content.includes(searchQuery.toLowerCase());
+      
+      return matchPhone || matchName || matchContent;
   });
 
   return (
@@ -47,7 +55,10 @@ export const ChatList: React.FC<ChatListProps> = ({
             const lastMsg = msgs[msgs.length - 1];
             const isSelected = selectedPhone === phone;
             const time = lastMsg.timestamp;
-            const unreadCount = 0; // Mock for now
+            
+            // Resolve Display Name
+            const displayName = phoneToNameMap[phone] || phone;
+            const hasName = !!phoneToNameMap[phone];
 
             return (
                 <div 
@@ -67,7 +78,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                             ? "bg-white text-indigo-600 border border-slate-200 shadow-sm" 
                             : "bg-slate-100 text-slate-500 group-hover:bg-white group-hover:shadow-sm"
                     )}>
-                        {phone.slice(1, 3)}
+                        {displayName.slice(0, 2).toUpperCase()}
                     </div>
 
                     <div className="flex-1 min-w-0 pt-0.5">
@@ -76,7 +87,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                                 "font-bold text-[15px] truncate",
                                 isSelected ? "text-slate-900" : "text-slate-700"
                             )}>
-                                {phone}
+                                {displayName}
                             </span>
                             <span className="text-xs text-slate-400 shrink-0 ml-2">{time}</span>
                         </div>

@@ -97,6 +97,9 @@ const AIChatPage: React.FC = () => {
     // --- State: Data ---
     const [messages, setMessages] = useState<SimMessage[]>([]);
     const messagesRef = useRef<SimMessage[]>([]); // Ref to hold latest messages for async callbacks
+    
+    // CRM Data Mapping
+    const [phoneToNameMap, setPhoneToNameMap] = useState<Record<string, string>>({});
 
     const [logs, setLogs] = useState<string[]>([]);
     const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
@@ -250,7 +253,52 @@ const AIChatPage: React.FC = () => {
         };
 
         loadConfig();
-    }, [user]); // Removed 'mode' dependency to prevent infinite loops if mode toggle logic is inside
+    }, [user]);
+
+    // Fetch CRM Names to display in Chat
+    useEffect(() => {
+        if (!supabase || !user) return;
+
+        const fetchLeadsMap = async () => {
+            const { data } = await supabase
+                .from('leads')
+                .select('phone, name')
+                .eq('user_id', user.id);
+            
+            if (data) {
+                const map: Record<string, string> = {};
+                data.forEach((l: any) => {
+                    // Normalize phone: strip spaces and standard chars if needed, 
+                    // but usually direct match is safest if format is consistent
+                    if (l.phone) map[l.phone] = l.name;
+                });
+                setPhoneToNameMap(map);
+            }
+        };
+
+        fetchLeadsMap();
+
+        // Subscribe to Leads changes to update names in real-time
+        const channel = supabase
+            .channel('leads-name-sync')
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'leads',
+                    filter: `user_id=eq.${user.id}`
+                },
+                () => {
+                    fetchLeadsMap();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [user]);
 
     useEffect(() => {
         if (!supabase || mode !== 'dashboard' || !organization) return;
@@ -955,6 +1003,7 @@ const AIChatPage: React.FC = () => {
                             aiStatus={aiStatus}
                             handleSimulatorSend={handleSimulatorSend}
                             classifyMessage={classifyMessage}
+                            phoneToNameMap={phoneToNameMap}
                         />
                     </TabsContent>
 
