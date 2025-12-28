@@ -139,7 +139,44 @@ export const generateStrategicResponse = async (
     }
 };
 
-// --- 3. LEAD SCORING ---
+// --- 3. LEAD SCORING SYSTEM ---
+
+/**
+ * Calculates score decay based on inactivity time.
+ * deterministic, no AI calls.
+ */
+export const applyDeterministicDecay = (currentScore: number, lastContactedAt: string): number => {
+    const now = new Date();
+    const last = new Date(lastContactedAt);
+    const diffTime = Math.abs(now.getTime() - last.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+    let decay = 0;
+
+    // Rule: ≥ 30 days inactive → mark as Cold (score ≤ 20)
+    if (diffDays >= 30) {
+        return Math.min(currentScore, 20);
+    }
+    // Rule: ≥ 14 days inactive → −20
+    else if (diffDays >= 14) {
+        decay = 20;
+    }
+    // Rule: ≥ 7 days inactive → −10
+    else if (diffDays >= 7) {
+        decay = 10;
+    }
+    // Rule: ≥ 3 days inactive → −5
+    else if (diffDays >= 3) {
+        decay = 5;
+    }
+
+    return Math.max(0, currentScore - decay);
+};
+
+/**
+ * Core AI Analysis Function.
+ * Calculates Purchase Intent based on conversation history.
+ */
 export const analyzeLeadPotential = async (
     chatHistory: { role: string, content: string }[],
     apiKey?: string
@@ -197,6 +234,69 @@ export const analyzeLeadPotential = async (
     }
 };
 
+/**
+ * Orchestrator for Real-Time Score Updates.
+ * Decides IF scoring should run, checks throttling, and updates DB.
+ */
+const updateLeadScore = async (
+    userId: string,
+    phone: string,
+    intent: RealEstateIntent,
+    chatHistory: ChatMessage[],
+    apiKey?: string
+) => {
+    // 1. Filter: Do NOT update score for low-signal messages
+    const meaningfulIntents: RealEstateIntent[] = [
+        'Price/Availability', 
+        'Booking/Viewing', 
+        'Property Inquiry',
+        'Handover/Keys' // Often implies post-sales but high engagement
+    ];
+
+    if (!meaningfulIntents.includes(intent)) {
+        // Just update timestamp for activity tracking
+        if (supabase) {
+            await supabase.from('leads')
+                .update({ last_contacted_at: new Date().toISOString() })
+                .match({ user_id: userId, phone: phone });
+        }
+        return;
+    }
+
+    // 2. Fetch current lead state
+    if (!supabase) return;
+    const { data: lead } = await supabase.from('leads')
+        .select('ai_score, last_contacted_at')
+        .match({ user_id: userId, phone: phone })
+        .maybeSingle();
+
+    if (!lead) return; // Lead doesn't exist yet (handled by DB triggers usually)
+
+    // 3. Run AI Analysis
+    const { score: newScore, analysis } = await analyzeLeadPotential(chatHistory, apiKey);
+
+    // 4. Throttling: Only update if difference >= 5
+    const currentScore = lead.ai_score || 0;
+    if (Math.abs(newScore - currentScore) < 5) {
+        // Update timestamp only
+        await supabase.from('leads')
+            .update({ last_contacted_at: new Date().toISOString() })
+            .match({ user_id: userId, phone: phone });
+        return;
+    }
+
+    // 5. Update DB
+    await supabase.from('leads')
+        .update({
+            ai_score: newScore,
+            ai_analysis: analysis,
+            last_contacted_at: new Date().toISOString()
+        })
+        .match({ user_id: userId, phone: phone });
+    
+    console.log(`[Lead Score] Updated ${phone}: ${currentScore} -> ${newScore} (${analysis})`);
+};
+
 // --- 4. MAIN PIPELINE (OPTIMIZED) ---
 export const processIncomingMessage = async (
     userMessage: string,
@@ -207,6 +307,18 @@ export const processIncomingMessage = async (
     apiKey?: string
 ) => {
     console.log("[AI Engine] ⚡ Starting optimized pipeline...");
+    
+    // Extract phone from history or context if available (needed for scoring)
+    // Note: In a real system, phone is passed explicitly. 
+    // Here we assume the caller context or we might need to change signature in future.
+    // For now, we rely on the DB triggers to handle lead creation, 
+    // but scoring requires knowing WHICH lead. 
+    // We'll extract phone from the 'user' object if accessible, but processIncomingMessage signature 
+    // doesn't have phone. We will assume the caller handles the phone mapping or we skip scoring 
+    // if phone isn't available in this scope. 
+    // *Amendment*: The messages table has phone. The 'chatHistory' doesn't usually carry metadata.
+    // We will proceed with generation, and assume the UI/Caller triggers scoring via side-effect 
+    // OR we infer phone if possible. 
     
     // OPTIMIZATION 1: Fast Path for Greetings
     const lowerMsg = userMessage.trim().toLowerCase();
@@ -240,6 +352,26 @@ export const processIncomingMessage = async (
         apiKey
     );
 
+    // --- SCORE UPDATE TRIGGER ---
+    // We need the phone number to update the specific lead.
+    // Since 'processIncomingMessage' signature is fixed by previous constraints,
+    // we look at the latest message in chatHistory or rely on the caller.
+    // However, to satisfy the requirement "Real-Time Score Update", we attempt to find the phone.
+    // The previous AIChatPage.tsx implementation calls this function.
+    // We will attempt to run the scoring asynchronously if we can resolve the phone from context/DB later,
+    // BUT since we can't change the signature, we expose the scoring logic for the caller to use,
+    // OR we perform a best-effort lookup if userId is provided.
+    
+    // In this specific architecture, the Chat Page calls this. 
+    // The Chat Page has the phone. Ideally, the Chat Page calls updateLeadScore.
+    // However, to make this "Engine" robust, we return the intent so the UI can decide.
+    // We ALSO perform a "Fire and Forget" update if we can identify the lead.
+    // Since we don't have 'phone' argument, we skip the DB update *inside* this function 
+    // to strictly adhere to "No Refactor of unrelated code" which might break the signature.
+    // *Instead*, we rely on the `intent` return value which the caller (AIChatPage) 
+    // can use to trigger `updateLeadScore` if it imports it.
+    // To enable this, we export `updateLeadScore`.
+
     return {
         intent,
         reply,
@@ -247,3 +379,5 @@ export const processIncomingMessage = async (
         contextUsed: !!context
     };
 };
+
+export { updateLeadScore };
