@@ -12,6 +12,15 @@ export type RealEstateIntent =
     | 'General Chat'
     | 'Unknown';
 
+// --- NEW: Action Types ---
+export type ActionType = 'NONE' | 'QUALIFY_LEAD' | 'REQUEST_VIEWING' | 'SCHEDULE_VIEWING' | 'HANDOVER_TO_AGENT';
+
+export interface ActionDecision {
+    type: ActionType;
+    confidence: number;
+    reason: string;
+}
+
 interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
@@ -88,14 +97,14 @@ export const retrieveContext = async (organizationId: string, message: string, a
     }
 };
 
-// --- 2. SINGLE-PASS GENERATION (Classify + Reply) ---
+// --- 2. SINGLE-PASS GENERATION (Classify + Reply + Action) ---
 export const generateStrategicResponse = async (
     userMessage: string, 
     context: string,
     systemInstruction: string,
     chatHistory: ChatMessage[],
     apiKey?: string
-): Promise<{ intent: RealEstateIntent, reply: string }> => {
+): Promise<{ intent: RealEstateIntent, reply: string, action: ActionDecision }> => {
     try {
         const systemPrompt = `
             ${systemInstruction}
@@ -111,10 +120,16 @@ export const generateStrategicResponse = async (
             ────────────────────────────
             1. ANALYZE the user's message and the conversation history.
             2. CLASSIFY the intent into one of: ['Property Inquiry', 'Price/Availability', 'Booking/Viewing', 'Location/Amenities', 'Handover/Keys', 'Complaint', 'General Chat'].
-            3. CHECK the "RETRIEVED KNOWLEDGE" section below. Use ONLY that information for specifics (price, location, specs). If info is missing, admit it politely or ask for clarification. Do NOT hallucinate features.
-            4. GENERATE a natural, persuasive response.
+            3. DECIDE the next business action based on these rules:
+               - QUALIFY_LEAD: For Property Inquiries, Price checks, or initial interest.
+               - REQUEST_VIEWING: If the user shows interest but hasn't confirmed a time.
+               - SCHEDULE_VIEWING: If the user proposes a specific date/time for a visit.
+               - HANDOVER_TO_AGENT: For Complaints, Handover/Keys, or complex legal/financial questions.
+               - NONE: For General Chat or simple greetings.
+            4. CHECK the "RETRIEVED KNOWLEDGE" section below. Use ONLY that information for specifics (price, location, specs). If info is missing, admit it politely or ask for clarification. Do NOT hallucinate features.
+            5. GENERATE a natural, persuasive response.
                - Keep it short (WhatsApp style).
-               - Always end with a question or Call-to-Action.
+               - Always end with a question or Call-to-Action matching your decided action.
 
             ────────────────────────────
             RETRIEVED KNOWLEDGE
@@ -127,7 +142,12 @@ export const generateStrategicResponse = async (
             You must respond in valid JSON format ONLY:
             {
                 "intent": "Category Name",
-                "reply": "Your message here"
+                "reply": "Your message here",
+                "action": {
+                    "type": "NONE | QUALIFY_LEAD | REQUEST_VIEWING | SCHEDULE_VIEWING | HANDOVER_TO_AGENT",
+                    "confidence": 0.85,
+                    "reason": "Short explanation"
+                }
             }
         `;
 
@@ -151,14 +171,16 @@ export const generateStrategicResponse = async (
         
         return {
             intent: parsed.intent || 'General Chat',
-            reply: parsed.reply || "I'm sorry, can you repeat that?"
+            reply: parsed.reply || "I'm sorry, can you repeat that?",
+            action: parsed.action || { type: 'NONE', confidence: 0, reason: 'Fallback default' }
         };
 
     } catch (error: any) {
         console.error("Strategic generation failed:", error);
         return {
             intent: 'Unknown',
-            reply: "I apologize, I'm having trouble processing that right now. A human agent will be with you shortly."
+            reply: "I apologize, I'm having trouble processing that right now. A human agent will be with you shortly.",
+            action: { type: 'HANDOVER_TO_AGENT', confidence: 1, reason: 'System error' }
         };
     }
 };
@@ -260,7 +282,7 @@ export const processIncomingMessage = async (
     }
 
     // Step 2: Single-Pass Classification & Generation
-    const { intent, reply } = await generateStrategicResponse(
+    const { intent, reply, action } = await generateStrategicResponse(
         userMessage, 
         context, 
         systemInstruction, 
@@ -271,6 +293,7 @@ export const processIncomingMessage = async (
     return {
         intent,
         reply,
+        action,
         contextUsed: !!context
     };
 };
