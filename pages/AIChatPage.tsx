@@ -686,7 +686,8 @@ const AIChatPage: React.FC = () => {
                     // @ts-ignore
                     if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
                          // @ts-ignore
-                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+                         // Use esm.sh for the worker to match the detected library version (5.4.449)
+                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.4.449/build/pdf.worker.mjs';
                     }
                     
                     const arrayBuffer = await file.arrayBuffer();
@@ -696,7 +697,7 @@ const AIChatPage: React.FC = () => {
                     // @ts-ignore
                     const loadingTask = pdfjsLib.getDocument({
                         data,
-                        cMapUrl: 'https://aistudiocdn.com/pdfjs-dist@4.0.379/cmaps/',
+                        cMapUrl: 'https://esm.sh/pdfjs-dist@5.4.449/cmaps/',
                         cMapPacked: true,
                     });
                     
@@ -722,6 +723,9 @@ const AIChatPage: React.FC = () => {
                 } catch (err: any) {
                     console.error("PDF Parse Error:", err);
                     addLog(`Error: Failed to parse PDF file. ${err.message || err}`);
+                    if (err.message && err.message.includes('version')) {
+                         addLog("Hint: PDF Worker version mismatch. Please refresh to reset.");
+                    }
                 }
             } else {
                 // Fallback for text-based files
