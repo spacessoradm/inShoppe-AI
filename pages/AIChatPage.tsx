@@ -680,26 +680,48 @@ const AIChatPage: React.FC = () => {
             
             if (file.type === 'application/pdf') {
                 try {
-                    // Set worker source
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+                    addLog("System: Reading PDF file...");
+                    
+                    // Set worker source if not already set
+                    // @ts-ignore
+                    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+                         // @ts-ignore
+                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+                    }
                     
                     const arrayBuffer = await file.arrayBuffer();
+                    // Convert to Uint8Array for robustness
+                    const data = new Uint8Array(arrayBuffer);
+                    
                     // @ts-ignore
-                    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                    const loadingTask = pdfjsLib.getDocument({
+                        data,
+                        cMapUrl: 'https://aistudiocdn.com/pdfjs-dist@4.0.379/cmaps/',
+                        cMapPacked: true,
+                    });
+                    
+                    const pdf = await loadingTask.promise;
                     let fullText = '';
                     
+                    addLog(`System: PDF loaded. Extracting text from ${pdf.numPages} pages...`);
+
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
                         const textContent = await page.getTextContent();
                         // @ts-ignore
                         const pageText = textContent.items.map((item: any) => item.str).join(' ');
-                        fullText += pageText + '\n';
+                        fullText += pageText + '\n\n';
                     }
-                    setKnowledgeInput(fullText);
-                    addLog(`System: PDF extracted (${pdf.numPages} pages).`);
-                } catch (err) {
+                    
+                    if (!fullText.trim()) {
+                        addLog("Warning: PDF extracted but no text found. It might be an image-only PDF.");
+                    } else {
+                         setKnowledgeInput(fullText);
+                         addLog(`System: PDF extraction complete.`);
+                    }
+                } catch (err: any) {
                     console.error("PDF Parse Error:", err);
-                    addLog("Error: Failed to parse PDF file. Ensure it is a valid PDF.");
+                    addLog(`Error: Failed to parse PDF file. ${err.message || err}`);
                 }
             } else {
                 // Fallback for text-based files
@@ -708,6 +730,7 @@ const AIChatPage: React.FC = () => {
                     const text = e.target?.result;
                     if (typeof text === 'string') {
                         setKnowledgeInput(text);
+                        addLog("System: Text file loaded.");
                     }
                 };
                 reader.readAsText(file);
