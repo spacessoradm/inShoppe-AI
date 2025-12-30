@@ -32,6 +32,7 @@ const CRMPage: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [leads, setLeads] = useState<Lead[]>([]);
     const [loading, setLoading] = useState(true);
+    const [notification, setNotification] = useState<{type: 'success'|'error', message: string} | null>(null);
     
     // Modal States
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -49,6 +50,12 @@ const CRMPage: React.FC = () => {
     
     const [saving, setSaving] = useState(false);
     const [analyzingId, setAnalyzingId] = useState<number | null>(null);
+
+    // Helpers
+    const showNotification = (type: 'success'|'error', message: string) => {
+        setNotification({ type, message });
+        setTimeout(() => setNotification(null), 4000);
+    };
 
     useEffect(() => {
         if (user) {
@@ -103,6 +110,7 @@ const CRMPage: React.FC = () => {
                 .from('leads')
                 .select('*')
                 .eq('user_id', user.id)
+                .order('next_appointment', { ascending: true, nullsFirst: false }) // Show upcoming appts first
                 .order('created_at', { ascending: false });
 
             if (error) {
@@ -147,7 +155,6 @@ const CRMPage: React.FC = () => {
                 status: formData.status,
                 deal_value: parseFloat(formData.value) || 0,
                 tags: ['Manual Entry'], // Default tag
-                // Only update timestamp on creation, or we can update last_contacted on edit
             };
 
             if (editingLeadId) {
@@ -157,12 +164,14 @@ const CRMPage: React.FC = () => {
                     .update(payload)
                     .eq('id', editingLeadId);
                 if (error) throw error;
+                showNotification('success', 'Lead updated successfully');
             } else {
                 // CREATE
                 const { error } = await supabase
                     .from('leads')
                     .insert({ ...payload, created_at: new Date().toISOString() });
                 if (error) throw error;
+                showNotification('success', 'Lead created successfully');
             }
             
             setIsAddModalOpen(false);
@@ -171,12 +180,9 @@ const CRMPage: React.FC = () => {
             // Reset form
             setFormData({ name: '', email: '', phone: '', value: '', status: 'New' });
             setEditingLeadId(null);
-            
-            // Allow realtime to update, or force refresh if needed
-            // fetchLeads(); 
         } catch (error: any) {
             console.error("Error saving lead:", error.message);
-            alert("Failed to save lead. " + error.message);
+            showNotification('error', 'Failed to save lead');
         } finally {
             setSaving(false);
         }
@@ -199,7 +205,7 @@ const CRMPage: React.FC = () => {
             if (error) throw error;
 
             if (!messages || messages.length === 0) {
-                alert("No conversation history found for this lead.");
+                showNotification('error', "No chat history found for analysis");
                 setAnalyzingId(null);
                 return;
             }
@@ -219,12 +225,31 @@ const CRMPage: React.FC = () => {
                 ai_analysis: analysis
             }).eq('id', lead.id);
 
-            // Realtime will update the UI
+            showNotification('success', 'AI Analysis Complete');
         } catch (e: any) {
             console.error("Analysis error:", e);
-            alert("Analysis failed: " + e.message);
+            showNotification('error', 'Analysis failed');
         } finally {
             setAnalyzingId(null);
+        }
+    };
+
+    const handleSendReminder = async (lead: Lead) => {
+        if (!lead.next_appointment) return;
+        
+        // Mock Reminder Sending
+        showNotification('success', `Reminder sent to ${lead.phone} for appointment at ${new Date(lead.next_appointment).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`);
+        
+        // In a real app, this would call Twilio API
+        if (supabase) {
+            await supabase.from('messages').insert({
+                user_id: user?.id,
+                text: `Hi ${lead.name}, this is a reminder for your viewing appointment tomorrow at ${new Date(lead.next_appointment).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}. See you there!`,
+                sender: 'bot',
+                direction: 'outbound',
+                phone: lead.phone,
+                intent_tag: 'Reminder'
+            });
         }
     };
 
@@ -235,7 +260,17 @@ const CRMPage: React.FC = () => {
     );
 
     return (
-        <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent bg-slate-50">
+        <div className="h-full overflow-y-auto p-4 lg:p-6 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent bg-slate-50 relative">
+             
+             {notification && (
+                <div className={cn(
+                    "fixed top-20 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg border text-sm font-medium animate-fadeInUp flex items-center gap-2",
+                    notification.type === 'success' ? "bg-green-100 border-green-200 text-green-800" : "bg-red-100 border-red-200 text-red-800"
+                )}>
+                    {notification.message}
+                </div>
+             )}
+
              <div className="max-w-[1600px] mx-auto space-y-6">
                  {/* Page Header */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -292,8 +327,8 @@ const CRMPage: React.FC = () => {
                                         <th className="px-6 py-4">Customer</th>
                                         <th className="px-6 py-4">Status</th>
                                         <th className="px-6 py-4">AI Score</th>
+                                        <th className="px-6 py-4">Next Appointment</th>
                                         <th className="px-6 py-4">Deal Value</th>
-                                        <th className="px-6 py-4">Created At</th>
                                         <th className="px-6 py-4 text-right">Actions</th>
                                     </tr>
                                 </thead>
@@ -352,14 +387,37 @@ const CRMPage: React.FC = () => {
                                                         <span className="text-xs text-slate-400">-</span>
                                                     )}
                                                 </td>
+                                                <td className="px-6 py-4">
+                                                    {lead.next_appointment ? (
+                                                        <div className="flex flex-col">
+                                                            <span className="font-bold text-slate-700 flex items-center gap-1">
+                                                                <CalendarIcon className="h-3 w-3 text-orange-500" />
+                                                                {new Date(lead.next_appointment).toLocaleDateString()}
+                                                            </span>
+                                                            <span className="text-xs text-slate-500">
+                                                                {new Date(lead.next_appointment).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                                            </span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-xs text-slate-400">No appointments</span>
+                                                    )}
+                                                </td>
                                                 <td className="px-6 py-4 font-medium text-slate-700">
                                                     {lead.deal_value ? `RM ${lead.deal_value.toLocaleString()}` : '-'}
                                                 </td>
-                                                <td className="px-6 py-4 text-slate-500 text-xs">
-                                                    {new Date(lead.created_at).toLocaleDateString()}
-                                                </td>
                                                 <td className="px-6 py-4 text-right">
                                                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        {lead.next_appointment && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="h-8 w-8 p-0 rounded-full hover:bg-orange-100 text-orange-500"
+                                                                title="Send Reminder"
+                                                                onClick={() => handleSendReminder(lead)}
+                                                            >
+                                                                <BellIcon className="h-4 w-4" />
+                                                            </Button>
+                                                        )}
                                                         <Button 
                                                             size="sm" 
                                                             variant="ghost" 
@@ -508,6 +566,26 @@ function SparklesIcon(props: React.SVGProps<SVGSVGElement>) {
     return (
         <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275Z" />
+        </svg>
+    )
+}
+
+function CalendarIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+            <line x1="16" x2="16" y1="2" y2="6" />
+            <line x1="8" x2="8" y1="2" y2="6" />
+            <line x1="3" x2="21" y1="10" y2="10" />
+        </svg>
+    )
+}
+
+function BellIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
         </svg>
     )
 }

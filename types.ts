@@ -58,4 +58,5 @@ export interface Lead {
   last_contacted_at?: string;
   ai_score?: number; // 0 to 100
   ai_analysis?: string; // Short reason
+  next_appointment?: string; // ISO Date string
 }

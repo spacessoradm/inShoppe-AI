@@ -428,10 +428,33 @@ const AIChatPage: React.FC = () => {
 
             // Wait for result or timeout
             const result: any = await Promise.race([processPromise, timeoutPromise]);
-            const { intent, reply, contextUsed } = result;
+            const { intent, reply, contextUsed, action } = result;
 
             // Update intent
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
+
+            // --- CRM ACTION HANDLER: BOOKING TRIGGER ---
+            if (action && (action.type === 'SCHEDULE_VIEWING' || action.type === 'REQUEST_VIEWING')) {
+                addLog(`CRM Action: 📅 Booking Intent Detected. Updating Lead...`);
+                
+                // Calculate simulated appointment time (Tomorrow + 24 hours for demo)
+                // In a real scenario, we would parse extracted date entities
+                const nextAppt = new Date(Date.now() + 86400000).toISOString(); 
+                
+                // Update Lead Status & Appointment
+                const { error: leadError } = await supabase.from('leads').update({
+                    status: 'Proposal',
+                    next_appointment: nextAppt,
+                    ai_analysis: `Booking Request: ${action.reason}`
+                }).match({ user_id: user.id, phone: phone });
+
+                if (leadError) {
+                    console.error("Failed to update CRM lead:", leadError);
+                } else {
+                    addLog(`CRM: ✅ Lead ${phone} updated to 'Proposal' with Appointment.`);
+                    showNotification('success', `New Booking Detected for ${phone}!`);
+                }
+            }
 
             setAiStatus(contextUsed ? 'Knowledge Used' : 'Replying...');
             // Small delay for UX naturalness, but only if it was fast
@@ -746,8 +769,8 @@ const AIChatPage: React.FC = () => {
         if (!urlInput || !supabase) return;
         setIsScraping(true);
         const domain = new URL(urlInput).hostname;
-        showNotification('info', `Scraping content from ${domain}...`);
-        addLog(`System: Scraping content from ${urlInput}...`);
+        showNotification('info', `Using Smart Scraper on ${domain}...`);
+        addLog(`System: Smart Scraping content from ${urlInput} via Jina AI...`);
         
         try {
             // Increased client timeout to 120s
@@ -755,8 +778,12 @@ const AIChatPage: React.FC = () => {
                 setTimeout(() => reject(new Error("Request timed out (120s).")), 120000)
             );
 
+            // Use Jina AI Reader Proxy: https://r.jina.ai/<url>
+            // This service renders JS and returns clean markdown, avoiding direct fetch blocks.
+            const jinaUrl = `https://r.jina.ai/${urlInput}`;
+
             const requestPromise = supabase.functions.invoke('openai-proxy', {
-                body: { action: 'scrape', url: urlInput }
+                body: { action: 'scrape', url: jinaUrl }
             });
 
             const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;

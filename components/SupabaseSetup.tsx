@@ -81,7 +81,8 @@ create table if not exists leads (
   last_contacted_at timestamptz,
   created_at timestamptz default now(),
   ai_score int default 0,
-  ai_analysis text
+  ai_analysis text,
+  next_appointment timestamptz -- NEW: For Booking Schedule
 );
 
 -- SAFETY: Add AI columns to leads if missing
@@ -92,6 +93,9 @@ begin
   end if;
   if not exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'ai_analysis') then
     alter table leads add column ai_analysis text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'next_appointment') then
+    alter table leads add column next_appointment timestamptz;
   end if;
 end $$;
 
