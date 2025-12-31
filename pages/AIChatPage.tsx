@@ -437,9 +437,17 @@ const AIChatPage: React.FC = () => {
             if (action && (action.type === 'SCHEDULE_VIEWING' || action.type === 'REQUEST_VIEWING')) {
                 addLog(`CRM Action: 📅 Booking Intent Detected. Updating Lead...`);
                 
-                // Calculate simulated appointment time (Tomorrow + 24 hours for demo)
-                // In a real scenario, we would parse extracted date entities
-                const nextAppt = new Date(Date.now() + 86400000).toISOString(); 
+                // Use the AI extracted date if available, otherwise default to 24h later
+                let nextAppt = new Date(Date.now() + 86400000).toISOString(); 
+                
+                if (action.parameters && action.parameters.appointmentDate) {
+                    const extractedDate = new Date(action.parameters.appointmentDate);
+                    // Basic validation to ensure it's a valid date
+                    if (!isNaN(extractedDate.getTime())) {
+                        nextAppt = extractedDate.toISOString();
+                        addLog(`CRM: 🕒 AI Extracted Appointment Time: ${nextAppt}`);
+                    }
+                }
                 
                 // Update Lead Status & Appointment
                 const { error: leadError } = await supabase.from('leads').update({
@@ -453,6 +461,22 @@ const AIChatPage: React.FC = () => {
                 } else {
                     addLog(`CRM: ✅ Lead ${phone} updated to 'Proposal' with Appointment.`);
                     showNotification('success', `New Booking Detected for ${phone}!`);
+                }
+            } 
+            // --- CRM ACTION HANDLER: CANCELLATION TRIGGER ---
+            else if (action && action.type === 'CANCEL_APPOINTMENT') {
+                addLog(`CRM Action: ❌ Cancellation Intent Detected. Updating Lead...`);
+                
+                const { error: leadError } = await supabase.from('leads').update({
+                    next_appointment: null,
+                    ai_analysis: `Appointment cancelled by user: ${action.reason}`
+                }).match({ user_id: user.id, phone: phone });
+
+                if (leadError) {
+                    console.error("Failed to cancel appointment:", leadError);
+                } else {
+                    addLog(`CRM: 🗑️ Appointment removed for ${phone}.`);
+                    showNotification('info', `Appointment cancelled for ${phone}.`);
                 }
             }
 

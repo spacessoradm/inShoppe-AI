@@ -112,6 +112,31 @@ const CalendarPage: React.FC = () => {
         }
     };
 
+    const handleCancelAppointment = async () => {
+        if (!selectedEvent || !supabase || !user) return;
+        
+        try {
+            // Remove appointment from database
+            const { error } = await supabase
+                .from('leads')
+                .update({ 
+                    next_appointment: null,
+                    ai_analysis: 'Appointment cancelled manually via calendar.' 
+                })
+                .eq('id', selectedEvent.leadId);
+
+            if (!error) {
+                // Update local state
+                setEvents(prev => prev.filter(e => e.id !== selectedEvent.id));
+                setSelectedEvent(null);
+            } else {
+                console.error("Failed to cancel appointment:", error);
+            }
+        } catch (e) {
+            console.error("Error cancelling appointment:", e);
+        }
+    };
+
     // --- Date Helpers ---
     const getDaysInMonth = (date: Date) => {
         const year = date.getFullYear();
@@ -352,8 +377,12 @@ const CalendarPage: React.FC = () => {
                         )}
                         {selectedEvent?.type === 'appointment' && (
                             <>
-                                <Button variant="outline" className="flex-1 bg-white border-slate-300 text-slate-700 hover:bg-slate-50" onClick={() => setSelectedEvent(null)}>
-                                    Reschedule
+                                <Button 
+                                    variant="destructive" 
+                                    className="flex-1 bg-white border border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300" 
+                                    onClick={handleCancelAppointment}
+                                >
+                                    Cancel Appt
                                 </Button>
                                 <Button className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm" onClick={() => setSelectedEvent(null)}>
                                     Mark Complete

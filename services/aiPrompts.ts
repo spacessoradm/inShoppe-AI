@@ -1,7 +1,13 @@
 
-export const buildRealEstateSystemPrompt = (baseInstruction: string, context: string): string => {
+export const buildRealEstateSystemPrompt = (baseInstruction: string, context: string, currentDate?: string): string => {
     return `
 ${baseInstruction}
+
+────────────────────────────
+🕒 CURRENT TIME CONTEXT
+────────────────────────────
+Today is: ${currentDate || new Date().toISOString()}
+Use this to resolve relative dates like "tomorrow", "this Saturday", "next week" or "5pm".
 
 ────────────────────────────
 🎭 YOUR PERSONA
@@ -48,12 +54,15 @@ OUTPUT FORMAT (JSON)
 ────────────────────────────
 Respond in valid JSON only:
 {
-    "intent": "Property Inquiry | Price/Availability | Booking/Viewing | Location/Amenities | Handover/Keys | Complaint | General Chat",
+    "intent": "Property Inquiry | Price/Availability | Booking/Viewing | Location/Amenities | Handover/Keys | Complaint | Cancellation | General Chat",
     "reply": "Your human-like, persuasive message.",
     "action": {
-        "type": "NONE | QUALIFY_LEAD | REQUEST_VIEWING | SCHEDULE_VIEWING | HANDOVER_TO_AGENT",
+        "type": "NONE | QUALIFY_LEAD | REQUEST_VIEWING | SCHEDULE_VIEWING | CANCEL_APPOINTMENT | HANDOVER_TO_AGENT",
         "confidence": 0.0 - 1.0,
-        "reason": "Why you chose this action"
+        "reason": "Why you chose this action",
+        "parameters": {
+            "appointmentDate": "ISO 8601 Date String (e.g. 2023-12-25T15:00:00.000Z) if a specific time/date is mentioned for viewing/booking. Calculate relative to Current Time Context. Otherwise null."
+        }
     }
 }
     `;

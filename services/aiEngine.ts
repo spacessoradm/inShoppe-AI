@@ -10,16 +10,20 @@ export type RealEstateIntent =
     | 'Location/Amenities' 
     | 'Handover/Keys' 
     | 'Complaint' 
+    | 'Cancellation'
     | 'General Chat'
     | 'Unknown';
 
 // --- Action Types ---
-export type ActionType = 'NONE' | 'QUALIFY_LEAD' | 'REQUEST_VIEWING' | 'SCHEDULE_VIEWING' | 'HANDOVER_TO_AGENT';
+export type ActionType = 'NONE' | 'QUALIFY_LEAD' | 'REQUEST_VIEWING' | 'SCHEDULE_VIEWING' | 'CANCEL_APPOINTMENT' | 'HANDOVER_TO_AGENT';
 
 export interface ActionDecision {
     type: ActionType;
     confidence: number;
     reason: string;
+    parameters?: {
+        appointmentDate?: string; // ISO 8601 extracted date
+    };
 }
 
 interface ChatMessage {
@@ -102,8 +106,13 @@ export const generateStrategicResponse = async (
     apiKey?: string
 ): Promise<{ intent: RealEstateIntent, reply: string, action: ActionDecision }> => {
     try {
+        // Provide current time context for date resolution
+        const now = new Date().toLocaleString('en-US', { 
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+        });
+
         // Build the strict prompt using the helper
-        const systemPrompt = buildRealEstateSystemPrompt(systemInstruction, context);
+        const systemPrompt = buildRealEstateSystemPrompt(systemInstruction, context, now);
 
         const messagesPayload: any[] = [
             { role: "system", content: systemPrompt },
@@ -310,15 +319,6 @@ export const processIncomingMessage = async (
     
     // Extract phone from history or context if available (needed for scoring)
     // Note: In a real system, phone is passed explicitly. 
-    // Here we assume the caller context or we might need to change signature in future.
-    // For now, we rely on the DB triggers to handle lead creation, 
-    // but scoring requires knowing WHICH lead. 
-    // We'll extract phone from the 'user' object if accessible, but processIncomingMessage signature 
-    // doesn't have phone. We will assume the caller handles the phone mapping or we skip scoring 
-    // if phone isn't available in this scope. 
-    // *Amendment*: The messages table has phone. The 'chatHistory' doesn't usually carry metadata.
-    // We will proceed with generation, and assume the UI/Caller triggers scoring via side-effect 
-    // OR we infer phone if possible. 
     
     // OPTIMIZATION 1: Fast Path for Greetings
     const lowerMsg = userMessage.trim().toLowerCase();
@@ -351,26 +351,6 @@ export const processIncomingMessage = async (
         chatHistory, 
         apiKey
     );
-
-    // --- SCORE UPDATE TRIGGER ---
-    // We need the phone number to update the specific lead.
-    // Since 'processIncomingMessage' signature is fixed by previous constraints,
-    // we look at the latest message in chatHistory or rely on the caller.
-    // However, to satisfy the requirement "Real-Time Score Update", we attempt to find the phone.
-    // The previous AIChatPage.tsx implementation calls this function.
-    // We will attempt to run the scoring asynchronously if we can resolve the phone from context/DB later,
-    // BUT since we can't change the signature, we expose the scoring logic for the caller to use,
-    // OR we perform a best-effort lookup if userId is provided.
-    
-    // In this specific architecture, the Chat Page calls this. 
-    // The Chat Page has the phone. Ideally, the Chat Page calls updateLeadScore.
-    // However, to make this "Engine" robust, we return the intent so the UI can decide.
-    // We ALSO perform a "Fire and Forget" update if we can identify the lead.
-    // Since we don't have 'phone' argument, we skip the DB update *inside* this function 
-    // to strictly adhere to "No Refactor of unrelated code" which might break the signature.
-    // *Instead*, we rely on the `intent` return value which the caller (AIChatPage) 
-    // can use to trigger `updateLeadScore` if it imports it.
-    // To enable this, we export `updateLeadScore`.
 
     return {
         intent,
