@@ -10,6 +10,7 @@ import SettingsPage from './pages/SettingsPage';
 import PricingPage from './pages/PricingPage';
 import CRMPage from './pages/CRMPage';
 import AIChatPage from './pages/AIChatPage';
+import CalendarPage from './pages/CalendarPage';
 
 const App: React.FC = () => {
   return (
@@ -70,6 +71,7 @@ const AppRoutes: React.FC = () => {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="crm" element={<CRMPage />} />
+        <Route path="calendar" element={<CalendarPage />} />
         <Route path="ai-chat" element={<AIChatPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

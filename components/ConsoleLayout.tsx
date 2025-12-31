@@ -55,6 +55,7 @@ const ConsoleLayout: React.FC = () => {
             <p className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Platform</p>
             <NavItem to="/console/dashboard" icon={HomeIcon} label="Dashboard" />
             <NavItem to="/console/crm" icon={BriefcaseIcon} label="CRM & Leads" />
+            <NavItem to="/console/calendar" icon={CalendarIcon} label="Calendar" />
             <NavItem to="/console/ai-chat" icon={BotIcon} label="AI Agent" />
           </div>
 
@@ -156,17 +157,6 @@ function HomeIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-function UsersIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  );
-}
-
 function BriefcaseIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -239,6 +229,17 @@ function BellIcon(props: React.SVGProps<SVGSVGElement>) {
         <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
             <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+        </svg>
+    )
+}
+
+function CalendarIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+            <line x1="16" x2="16" y1="2" y2="6" />
+            <line x1="8" x2="8" y1="2" y2="6" />
+            <line x1="3" x2="21" y1="10" y2="10" />
         </svg>
     )
 }
