@@ -15,7 +15,7 @@ export type RealEstateIntent =
     | 'Unknown';
 
 // --- Action Types ---
-export type ActionType = 'NONE' | 'QUALIFY_LEAD' | 'REQUEST_VIEWING' | 'SCHEDULE_VIEWING' | 'CANCEL_APPOINTMENT' | 'HANDOVER_TO_AGENT';
+export type ActionType = 'NONE' | 'QUALIFY_LEAD' | 'REQUEST_VIEWING' | 'SCHEDULE_VIEWING' | 'RESCHEDULE_APPOINTMENT' | 'CANCEL_APPOINTMENT' | 'HANDOVER_TO_AGENT';
 
 export interface ActionDecision {
     type: ActionType;
@@ -23,6 +23,7 @@ export interface ActionDecision {
     reason: string;
     parameters?: {
         appointmentDate?: string; // ISO 8601 extracted date
+        propertyInterest?: string; // Extracted Project/Property Name
     };
 }
 

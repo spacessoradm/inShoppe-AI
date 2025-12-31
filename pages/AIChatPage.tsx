@@ -433,9 +433,9 @@ const AIChatPage: React.FC = () => {
             // Update intent
             await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
 
-            // --- CRM ACTION HANDLER: BOOKING TRIGGER ---
-            if (action && (action.type === 'SCHEDULE_VIEWING' || action.type === 'REQUEST_VIEWING')) {
-                addLog(`CRM Action: 📅 Booking Intent Detected. Updating Lead...`);
+            // --- CRM ACTION HANDLER: BOOKING & RESCHEDULING ---
+            if (action && (action.type === 'SCHEDULE_VIEWING' || action.type === 'REQUEST_VIEWING' || action.type === 'RESCHEDULE_APPOINTMENT')) {
+                addLog(`CRM Action: 📅 Booking/Update Intent Detected. Updating Lead...`);
                 
                 // Use the AI extracted date if available, otherwise default to 24h later
                 let nextAppt = new Date(Date.now() + 86400000).toISOString(); 
@@ -449,18 +449,40 @@ const AIChatPage: React.FC = () => {
                     }
                 }
                 
-                // Update Lead Status & Appointment
-                const { error: leadError } = await supabase.from('leads').update({
+                // Prepare updates
+                const updates: any = {
                     status: 'Proposal',
                     next_appointment: nextAppt,
-                    ai_analysis: `Booking Request: ${action.reason}`
-                }).match({ user_id: user.id, phone: phone });
+                    ai_analysis: `Booking Update: ${action.reason}`
+                };
+
+                // HANDLE PROJECT/PROPERTY INTEREST UPDATE
+                // If user mentions a specific project, we want to tag them with it
+                if (action.parameters && action.parameters.propertyInterest) {
+                    const project = action.parameters.propertyInterest;
+                    addLog(`CRM: 🏷️ New Project Interest Detected: ${project}`);
+                    
+                    // Fetch existing tags to append
+                    const { data: existingLead } = await supabase.from('leads').select('tags').match({ user_id: user.id, phone: phone }).maybeSingle();
+                    let newTags = existingLead?.tags || [];
+                    
+                    // Simple dedupe
+                    if (!newTags.some((t: string) => t.toLowerCase() === project.toLowerCase())) {
+                        newTags.push(project);
+                    }
+                    updates.tags = newTags;
+                    updates.ai_analysis += ` | Interested in: ${project}`;
+                }
+
+                // Execute Update
+                const { error: leadError } = await supabase.from('leads').update(updates).match({ user_id: user.id, phone: phone });
 
                 if (leadError) {
                     console.error("Failed to update CRM lead:", leadError);
                 } else {
-                    addLog(`CRM: ✅ Lead ${phone} updated to 'Proposal' with Appointment.`);
-                    showNotification('success', `New Booking Detected for ${phone}!`);
+                    const actionName = action.type === 'RESCHEDULE_APPOINTMENT' ? 'Rescheduled' : 'Booking';
+                    addLog(`CRM: ✅ Lead ${phone} updated (${actionName}).`);
+                    showNotification('success', `${actionName} Confirmed for ${phone}!`);
                 }
             } 
             // --- CRM ACTION HANDLER: CANCELLATION TRIGGER ---
@@ -469,13 +491,14 @@ const AIChatPage: React.FC = () => {
                 
                 const { error: leadError } = await supabase.from('leads').update({
                     next_appointment: null,
+                    status: 'Qualified', // Revert status so they aren't 'Proposal' without a date
                     ai_analysis: `Appointment cancelled by user: ${action.reason}`
                 }).match({ user_id: user.id, phone: phone });
 
                 if (leadError) {
                     console.error("Failed to cancel appointment:", leadError);
                 } else {
-                    addLog(`CRM: 🗑️ Appointment removed for ${phone}.`);
+                    addLog(`CRM: 🗑️ Appointment removed for ${phone}. Status reverted to 'Qualified'.`);
                     showNotification('info', `Appointment cancelled for ${phone}.`);
                 }
             }
