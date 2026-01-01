@@ -5,60 +5,188 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/utils';
 
-// --- EDGE FUNCTION CODE SNIPPET (TWILIO WEBHOOK) ---
+// --- HELPER: JSON STRUCTURE FOR PROMPT ---
+// We define this outside the string to ensure valid escaping when injected.
+const RESPONSE_FORMAT_JSON = JSON.stringify({
+    intent: "Property Inquiry | Price/Availability | Booking/Viewing | Location/Amenities | Handover/Keys | Complaint | Cancellation | General Chat",
+    reply: "Your human-like message.",
+    action: {
+        type: "NONE | QUALIFY_LEAD | REQUEST_VIEWING | SCHEDULE_VIEWING | RESCHEDULE_APPOINTMENT | CANCEL_APPOINTMENT | HANDOVER_TO_AGENT",
+        reason: "Why you chose this action",
+        parameters: {
+            appointmentDate: "ISO 8601 Date String (e.g. 2023-12-25T15:00:00.000Z) or null.",
+            propertyInterest: "Extracted Project/Property Name or null"
+        }
+    }
+}, null, 2);
+
+// --- EDGE FUNCTION CODE SNIPPET (SERVER-SIDE AI WORKER) ---
 const EDGE_FUNCTION_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import OpenAI from 'https://esm.sh/openai@4.28.0'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+const openAiKey = Deno.env.get('OPENAI_API_KEY') ?? ''
+
+// --- SYSTEM PROMPT GENERATOR ---
+const buildSystemPrompt = (baseInstruction, context, now) => {
+  // Using array join to construct the prompt cleanly
+  return [
+    baseInstruction,
+    "",
+    "────────────────────────────",
+    "🕒 CURRENT TIME CONTEXT",
+    "────────────────────────────",
+    "Today is: " + now,
+    "Use this to resolve relative dates like 'tomorrow', 'this Saturday', 'next week' or '5pm'.",
+    "",
+    "────────────────────────────",
+    "🎭 YOUR PERSONA",
+    "────────────────────────────",
+    "You are a top-tier, human-like Senior Real Estate Consultant.", 
+    "- TONE: Warm, professional, enthusiastic, and confident.", 
+    "- NEVER say 'I am an AI'. Act as a human agent.",
+    "",
+    "────────────────────────────",
+    "🧠 INTELLIGENT RECOMMENDATION LOGIC",
+    "────────────────────────────",
+    "Use the 'RETRIEVED INVENTORY' below to answer.",
+    "1. **MATCHING LOGIC**: If user asks for specific area/type, match loosely.",
+    "2. **THE 'PIVOT' RULE**: If you don't have the exact listing, offer a nearby alternative.",
+    "3. **CALL TO ACTION**: End with a question to advance the sale.",
+    "",
+    "────────────────────────────",
+    "📚 RETRIEVED INVENTORY",
+    "────────────────────────────",
+    context || "No specific property details found. Engage to understand needs.",
+    "",
+    "────────────────────────────",
+    "OUTPUT FORMAT (JSON)",
+    "────────────────────────────",
+    "Respond in valid JSON only:",
+    ${JSON.stringify(RESPONSE_FORMAT_JSON)}
+  ].join("\\n");
+};
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } })
 
   try {
     const formData = await req.formData()
     const incomingMsg = formData.get('Body')?.toString() || ''
-    
     let senderPhone = formData.get('From')?.toString() || ''
     let merchantPhone = formData.get('To')?.toString() || ''
-
     senderPhone = senderPhone.replace('whatsapp:', '')
     merchantPhone = merchantPhone.replace('whatsapp:', '')
 
+    if (!incomingMsg) return new Response('No Body', { status: 200 })
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    const openai = new OpenAI({ apiKey: openAiKey })
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('twilio_phone_number', merchantPhone)
-      .single()
-
+    // 1. GET MERCHANT PROFILE & SETTINGS
+    const { data: profile } = await supabase.from('profiles').select('id, organization_id').eq('twilio_phone_number', merchantPhone).single()
     if (!profile) return new Response('Profile not found', { status: 404 })
 
-    const { error: insertError } = await supabase
-      .from('messages')
-      .insert({
-        user_id: profile.id, 
-        text: incomingMsg,
-        sender: 'user',
-        direction: 'inbound',
-        phone: senderPhone,
-        intent_tag: 'Processing...'
-      })
+    const { data: settings } = await supabase.from('user_settings').select('system_instruction').eq('user_id', profile.id).single()
+    const systemInstruction = settings?.system_instruction || "You are a helpful real estate assistant."
 
+    // 2. RAG: RETRIEVE CONTEXT
+    let context = ""
+    try {
+        const embeddingResp = await openai.embeddings.create({ model: "text-embedding-3-small", input: incomingMsg, dimensions: 768 })
+        const embedding = embeddingResp.data[0].embedding
+        const { data: chunks } = await supabase.rpc('match_knowledge', { 
+            query_embedding: embedding, match_threshold: 0.5, match_count: 3 
+        })
+        if (chunks && chunks.length > 0) context = chunks.map(c => c.content).join("\\n\\n")
+    } catch (err) { console.error("RAG Error:", err) }
+
+    // 3. FETCH HISTORY
+    const { data: historyData } = await supabase.from('messages')
+        .select('text, sender')
+        .eq('user_id', profile.id)
+        .eq('phone', senderPhone)
+        .order('created_at', { ascending: false })
+        .limit(10)
+    
+    const chatHistory = (historyData || []).reverse().map(m => ({
+        role: m.sender === 'user' ? 'user' : 'assistant',
+        content: m.text
+    }))
+
+    // 4. GENERATE AI RESPONSE
+    const now = new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    const fullPrompt = buildSystemPrompt(systemInstruction, context, now)
+
+    const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+            { role: "system", content: fullPrompt },
+            ...chatHistory,
+            { role: "user", content: incomingMsg }
+        ],
+        temperature: 0.3,
+        response_format: { type: "json_object" }
+    })
+
+    const aiContent = JSON.parse(completion.choices[0].message.content)
+    const { intent, reply, action } = aiContent
+
+    // 5. DB: INSERT USER MESSAGE (Logged as processed)
+    await supabase.from('messages').insert({
+        user_id: profile.id, text: incomingMsg, sender: 'user', direction: 'inbound', phone: senderPhone, intent_tag: intent
+    })
+
+    // 6. DB: INSERT BOT REPLY
+    await supabase.from('messages').insert({
+        user_id: profile.id, text: reply, sender: 'bot', direction: 'outbound', phone: senderPhone
+    })
+
+    // 7. CRM ACTIONS (Leads)
+    // Check if lead exists
+    const { data: lead } = await supabase.from('leads').select('id, tags').match({ user_id: profile.id, phone: senderPhone }).maybeSingle()
+    
+    let leadUpdates = { last_contacted_at: new Date().toISOString() }
+    
+    if (!lead) {
+        // Create new lead if not exists
+        await supabase.from('leads').insert({
+            user_id: profile.id, name: 'Lead ' + senderPhone, phone: senderPhone, status: 'New', ...leadUpdates
+        })
+    } else {
+        // Update existing lead based on Action
+        if (action?.type === 'SCHEDULE_VIEWING' || action?.type === 'RESCHEDULE_APPOINTMENT') {
+            leadUpdates.status = 'Proposal'
+            leadUpdates.ai_analysis = \`Booking: \${action.reason}\`
+            if (action.parameters?.appointmentDate) {
+                leadUpdates.next_appointment = action.parameters.appointmentDate
+            }
+        }
+        if (action?.type === 'CANCEL_APPOINTMENT') {
+            leadUpdates.next_appointment = null
+            leadUpdates.status = 'Qualified' // Revert to qualified
+            leadUpdates.ai_analysis = 'Appointment cancelled by user.'
+        }
+        if (action?.parameters?.propertyInterest) {
+            const newTag = action.parameters.propertyInterest
+            const tags = lead.tags || []
+            if (!tags.includes(newTag)) leadUpdates.tags = [...tags, newTag]
+        }
+        
+        await supabase.from('leads').update(leadUpdates).eq('id', lead.id)
+    }
+
+    // 8. RETURN TWIML (To send reply via Twilio)
     return new Response(
-      '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+      \`<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>\${reply}</Body></Message></Response>\`,
       { headers: { "Content-Type": "text/xml" } }
     )
 
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      headers: { "Content-Type": "application/json" },
-      status: 400,
-    })
+    return new Response(JSON.stringify({ error: error.message }), { status: 400 })
   }
 })
 `;
@@ -67,7 +195,7 @@ serve(async (req) => {
 const OPENAI_PROXY_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import OpenAI from 'https://esm.sh/openai@4.28.0'
-import * as cheerio from 'https://esm.sh/cheerio@1.0.0-rc.12'
+import { load } from 'https://esm.sh/cheerio@1.0.0-rc.12'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -85,7 +213,6 @@ serve(async (req) => {
     if (!bodyText) throw new Error("Empty request body");
     
     const { action, apiKey, ...payload } = JSON.parse(bodyText);
-    console.log('Action received:', action)
     
     // 1. Resolve API Key (Only needed for AI actions)
     const finalApiKey = apiKey || Deno.env.get('OPENAI_API_KEY')
@@ -103,10 +230,8 @@ serve(async (req) => {
     if (action === 'scrape') {
       const { url } = payload;
       if (!url) throw new Error('URL is required');
-      console.log('Scraping URL:', url);
       
       const controller = new AbortController();
-      // 25s target timeout - fail fast if site is stuck so we can return error to UI
       const timeoutId = setTimeout(() => controller.abort(), 25000); 
 
       try {
@@ -114,102 +239,26 @@ serve(async (req) => {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.google.com/',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'cross-site',
-            'Upgrade-Insecure-Requests': '1'
           },
           signal: controller.signal
         });
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
-             // Return as text so UI can show it
-             return new Response(JSON.stringify({ text: "Error: Failed to fetch URL (" + response.status + "). Site might block bots." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
+        if (!response.ok) return new Response(JSON.stringify({ text: "Error: Failed to fetch URL." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         
-        // STREAMING READ with Size Limit (Max 2MB)
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let html = '';
-        let receivedLength = 0;
-        const MAX_SIZE = 2 * 1024 * 1024; // 2MB limit
-
-        if (reader) {
-          while(true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            receivedLength += value.length;
-            html += decoder.decode(value, {stream: true});
-            if (receivedLength > MAX_SIZE) {
-              console.log('Scraper: Size limit exceeded, truncating download.');
-              reader.cancel();
-              break;
-            }
-          }
-          html += decoder.decode(); 
-        } else {
-          html = await response.text();
-        }
+        const html = await response.text();
+        const doc = load(html);
         
-        const $ = cheerio.load(html);
-        
-        // Remove junk
-        $('script, style, noscript, iframe, svg, canvas, video, audio, link, button, input, form').remove();
-        $('header, footer, nav, aside, [role="banner"], [role="navigation"], [role="contentinfo"]').remove();
-        $('.menu, .nav, .sidebar, .comments, .ad, .ads, .popup, .modal, .cookie-banner, .social-share').remove();
-        
-        // Priority Extraction for Real Estate/Articles
-        let text = '';
-        const selectors = [
-            'article', 
-            'main', 
-            '#content', 
-            '.content', 
-            '.property-description', 
-            '.listing-details', 
-            '.post-content',
-            '#main',
-            '.entry-content'
-        ];
-        
-        // Try to find the best container
-        for (const sel of selectors) {
-            const el = $(sel);
-            if (el.length > 0 && el.text().trim().length > 200) {
-                text = el.text();
-                break;
-            }
-        }
-        
-        // Fallback to body if specific selectors fail
-        if (!text) {
-            text = $('body').text();
-        }
-        
-        // Clean whitespace
+        doc('script, style, noscript, iframe, svg').remove();
+        let text = doc('body').text();
         text = text.replace(new RegExp('[\\\\s\\\\n\\\\r]+', 'g'), ' ').trim();
         
-        if (text.length > 25000) text = text.substring(0, 25000) + '... (Truncated)';
-        
-        if (!text || text.length < 50) {
-             text = "Error: Could not extract readable text. The site might be dynamic (React/Vue/SPA) and requires a headless browser.";
-        }
+        if (text.length > 25000) text = text.substring(0, 25000) + '...';
           
         return new Response(JSON.stringify({ text }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
       } catch (fetchErr) {
-        clearTimeout(timeoutId);
-        let errorMsg = "Error: Scraping failed.";
-        if (fetchErr.name === 'AbortError') {
-            errorMsg = "Error: Site took too long to respond (Timeout). Please copy text manually.";
-        } else {
-            errorMsg = "Error: " + fetchErr.message;
-        }
-        // Return 200 with error message in text so client doesn't throw
-        return new Response(JSON.stringify({ text: errorMsg }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify({ text: "Error: " + fetchErr.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       }
     }
 
@@ -229,7 +278,6 @@ serve(async (req) => {
     throw new Error('Invalid action: ' + action)
 
   } catch (error) {
-    console.error('Edge Function Error:', error);
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200,
@@ -290,11 +338,20 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
                     </CardContent>
                 </Card>
 
-                <Card className="border border-slate-200 bg-white text-slate-900 shadow-sm">
-                    <CardHeader><CardTitle>Twilio Webhook Function</CardTitle></CardHeader>
+                <Card className="border border-amber-200 bg-amber-50 text-slate-900 shadow-sm">
+                    <CardHeader>
+                        <CardTitle className="text-amber-700">Recommended: Server-Side AI Worker</CardTitle>
+                        <CardDescription className="text-amber-600/70">
+                            Deploy this code to handle Twilio webhooks directly. This ensures AI replies even if you close the dashboard.
+                        </CardDescription>
+                    </CardHeader>
                     <CardContent>
                         <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px] shadow-inner"><pre>{EDGE_FUNCTION_CODE}</pre></div>
-                        <Button size="sm" className="mt-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Code</Button>
+                        <Button size="sm" className="mt-2 bg-amber-600 hover:bg-amber-500 text-white" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Worker Code</Button>
+                        <div className="mt-2 text-xs text-slate-500">
+                            1. Deploy as <code>dynamic-endpoint</code> or <code>whatsapp-webhook</code>.<br/>
+                            2. Set <code>OPENAI_API_KEY</code>, <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code> in Secrets.
+                        </div>
                     </CardContent>
                 </Card>
             </div>

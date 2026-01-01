@@ -390,7 +390,7 @@ const AIChatPage: React.FC = () => {
     const processAndReplyToMessage = async (msgId: string, text: string, phone: string) => {
         if (!supabase || !user) return;
         
-        addLog(`AI Brain: 🧠 Processing message [${msgId}]...`);
+        addLog(`AI Brain: 🧠 Processing message [${msgId}] locally...`);
         setAiStatus('Analyzing...');
 
         setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
@@ -639,9 +639,15 @@ const AIChatPage: React.FC = () => {
                         
                         if (!selectedPhone) setSelectedPhone(newMsg.phone);
 
+                        // --- SMART HANDOFF LOGIC ---
+                        // Only process locally if the message is "inbound" AND hasn't been processed by the backend yet.
+                        // If the backend processed it, intent_tag will be 'General Chat', 'Inquiry', etc.
+                        // If it's fresh, intent_tag is usually 'Processing...' or null.
+                        const isProcessedByBackend = newMsg.intent_tag && newMsg.intent_tag !== 'Processing...';
+                        
                         if (
                             (newMsg.direction === 'inbound' || newMsg.sender === 'user') && 
-                            (!newMsg.intent_tag || newMsg.intent_tag === 'Processing...')
+                            !isProcessedByBackend
                         ) {
                             processAndReplyToMessage(msgId, newMsg.text, newMsg.phone);
                         }
