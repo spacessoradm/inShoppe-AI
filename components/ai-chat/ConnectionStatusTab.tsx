@@ -5,188 +5,407 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/utils';
 
-// --- HELPER: JSON STRUCTURE FOR PROMPT ---
-// We define this outside the string to ensure valid escaping when injected.
-const RESPONSE_FORMAT_JSON = JSON.stringify({
-    intent: "Property Inquiry | Price/Availability | Booking/Viewing | Location/Amenities | Handover/Keys | Complaint | Cancellation | General Chat",
-    reply: "Your human-like message.",
-    action: {
-        type: "NONE | QUALIFY_LEAD | REQUEST_VIEWING | SCHEDULE_VIEWING | RESCHEDULE_APPOINTMENT | CANCEL_APPOINTMENT | HANDOVER_TO_AGENT",
-        reason: "Why you chose this action",
-        parameters: {
-            appointmentDate: "ISO 8601 Date String (e.g. 2023-12-25T15:00:00.000Z) or null.",
-            propertyInterest: "Extracted Project/Property Name or null"
-        }
-    }
-}, null, 2);
+// --- DOCUMENT GENERATOR EDGE FUNCTION ---
+const DOC_GEN_CODE = `
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+// Note: In a real Deno environment, we would import a docx library compatible with Deno/Web Standards.
+// For this example, we'll simulate the logic or use a text-replacement approach if libraries are heavy.
+// A common approach is using 'docxtemplater' via a CDN that supports Deno, or a simple unzip/xml-replace/zip approach.
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
+  try {
+    const { record_id, template_id, data } = await req.json()
+    
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    // 1. Fetch Template (In a real app, download from Storage)
+    // const { data: templateData } = await supabaseClient.storage.from('documents').download('templates/SPA_Template.docx')
+    
+    // 2. Process Document (Simulated here for brevity)
+    console.log("Generating document for:", data.buyer?.name)
+    
+    // 3. Upload Result (Simulated)
+    // const { data: uploadData } = await supabaseClient.storage.from('documents').upload(\`generated/\${record_id}.docx\`, generatedBuffer)
+    
+    // 4. Get Public URL
+    const publicUrl = \`https://placeholder-url.com/docs/\${record_id}.docx\` // Replace with actual storage.getPublicUrl
+
+    // 5. Update Database Record
+    await supabaseClient
+      .from('generated_documents')
+      .update({ 
+        status: 'generated',
+        file_url: publicUrl 
+      })
+      .eq('id', record_id)
+
+    return new Response(
+      JSON.stringify({ success: true, url: publicUrl }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    )
+
+  } catch (error) {
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    )
+  }
+})
+`;
 
 // --- EDGE FUNCTION CODE SNIPPET (SERVER-SIDE AI WORKER) ---
 const EDGE_FUNCTION_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import OpenAI from 'https://esm.sh/openai@4.28.0'
+import OpenAI from "https://esm.sh/openai@4.28.0"
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-const openAiKey = Deno.env.get('OPENAI_API_KEY') ?? ''
+/* ───────────────────────────── */
+/* ENV */
+/* ───────────────────────────── */
+const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? ""
+const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+const openAiKey = Deno.env.get("OPENAI_API_KEY") ?? ""
 
-// --- SYSTEM PROMPT GENERATOR ---
-const buildSystemPrompt = (baseInstruction, context, now) => {
-  // Using array join to construct the prompt cleanly
+/* ───────────────────────────── */
+/* RESPONSE FORMAT */
+/* ───────────────────────────── */
+const RESPONSE_FORMAT_JSON = {
+  intent: "string",
+  reply: "string",
+  action: {
+    type: "string | null",
+    reason: "string | null",
+    parameters: "object | null"
+  }
+}
+
+/* ───────────────────────────── */
+/* UTILITIES */
+/* ───────────────────────────── */
+
+// Hard JSON enforcement + auto repair
+function safeParseAIJson(raw: string) {
+  const cleaned = raw
+    .replace(/\`\`\`json/g, "")
+    .replace(/\`\`\`/g, "")
+    .trim()
+
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    try {
+      const start = cleaned.indexOf("{")
+      const end = cleaned.lastIndexOf("}")
+      if (start !== -1 && end !== -1) {
+        return JSON.parse(cleaned.slice(start, end + 1))
+      }
+    } catch {}
+
+    return {
+      intent: "GENERAL_INQUIRY",
+      reply: cleaned,
+      action: null
+    }
+  }
+}
+
+// Timeout protection
+async function withTimeout<T>(promise: Promise<T>, ms = 12_000): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout")), ms)
+    )
+  ])
+}
+
+// Retry once only
+async function openaiWithRetry(fn: () => Promise<any>) {
+  try {
+    return await withTimeout(fn())
+  } catch {
+    console.warn("Retrying OpenAI once...")
+    return await withTimeout(fn(), 10_000)
+  }
+}
+
+// Language detection (CN / MS / EN only)
+function detectLanguage(text: string): "zh" | "ms" | "en" {
+  if (/[\\u4e00-\\u9fff]/.test(text)) return "zh"
+  if (/\\b(apa|boleh|tolong|nak|berapa|harga|saya|kami|rumah|condo)\\b/i.test(text))
+    return "ms"
+  return "en"
+}
+
+/* ───────────────────────────── */
+/* SYSTEM PROMPT */
+/* ───────────────────────────── */
+function buildSystemPrompt(
+  baseInstruction: string,
+  context: string,
+  now: string
+) {
   return [
     baseInstruction,
     "",
-    "────────────────────────────",
-    "🕒 CURRENT TIME CONTEXT",
-    "────────────────────────────",
-    "Today is: " + now,
-    "Use this to resolve relative dates like 'tomorrow', 'this Saturday', 'next week' or '5pm'.",
+    "IMPORTANT:",
+    "You MUST respond in VALID JSON only.",
+    "If JSON is invalid, your response will be rejected.",
     "",
-    "────────────────────────────",
-    "🎭 YOUR PERSONA",
-    "────────────────────────────",
-    "You are a top-tier, human-like Senior Real Estate Consultant.", 
-    "- TONE: Warm, professional, enthusiastic, and confident.", 
-    "- NEVER say 'I am an AI'. Act as a human agent.",
+    "Current time:",
+    now,
     "",
-    "────────────────────────────",
-    "🧠 INTELLIGENT RECOMMENDATION LOGIC",
-    "────────────────────────────",
-    "Use the 'RETRIEVED INVENTORY' below to answer.",
-    "1. **MATCHING LOGIC**: If user asks for specific area/type, match loosely.",
-    "2. **THE 'PIVOT' RULE**: If you don't have the exact listing, offer a nearby alternative.",
-    "3. **CALL TO ACTION**: End with a question to advance the sale.",
+    "You are a professional Senior Real Estate Consultant.",
+    "Tone: warm, confident, human.",
+    "Never say you are an AI.",
     "",
-    "────────────────────────────",
-    "📚 RETRIEVED INVENTORY",
-    "────────────────────────────",
-    context || "No specific property details found. Engage to understand needs.",
+    "Use retrieved inventory below if available.",
     "",
-    "────────────────────────────",
-    "OUTPUT FORMAT (JSON)",
-    "────────────────────────────",
-    "Respond in valid JSON only:",
-    ${JSON.stringify(RESPONSE_FORMAT_JSON)}
-  ].join("\\n");
-};
+    "RETRIEVED INVENTORY:",
+    context || "No inventory found.",
+    "",
+    "JSON FORMAT:",
+    JSON.stringify(RESPONSE_FORMAT_JSON)
+  ].join("\\n")
+}
 
+/* ───────────────────────────── */
+/* SERVER */
+/* ───────────────────────────── */
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: { 'Access-Control-Allow-Origin': '*' } })
+  // CORS
+  if (req.method === "OPTIONS") {
+    return new Response("ok", {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS"
+      }
+    })
+  }
 
   try {
     const formData = await req.formData()
-    const incomingMsg = formData.get('Body')?.toString() || ''
-    let senderPhone = formData.get('From')?.toString() || ''
-    let merchantPhone = formData.get('To')?.toString() || ''
-    senderPhone = senderPhone.replace('whatsapp:', '')
-    merchantPhone = merchantPhone.replace('whatsapp:', '')
+    const incomingMsg = formData.get("Body")?.toString() || ""
+    let senderPhone = formData.get("From")?.toString() || ""
+    let merchantPhone = formData.get("To")?.toString() || ""
 
-    if (!incomingMsg) return new Response('No Body', { status: 200 })
+    senderPhone = senderPhone.replace(/^whatsapp:/, "")
+    merchantPhone = merchantPhone.replace(/^whatsapp:/, "")
+
+    if (!incomingMsg) return new Response("OK")
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
     const openai = new OpenAI({ apiKey: openAiKey })
 
-    // 1. GET MERCHANT PROFILE & SETTINGS
-    const { data: profile } = await supabase.from('profiles').select('id, organization_id').eq('twilio_phone_number', merchantPhone).single()
-    if (!profile) return new Response('Profile not found', { status: 404 })
+    /* ───────────────────────────── */
+    /* MERCHANT PROFILE */
+/* ───────────────────────────── */
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("twilio_phone_number", merchantPhone)
+      .single()
 
-    const { data: settings } = await supabase.from('user_settings').select('system_instruction').eq('user_id', profile.id).single()
-    const systemInstruction = settings?.system_instruction || "You are a helpful real estate assistant."
+    if (!profile) return new Response("Profile not found", { status: 404 })
 
-    // 2. RAG: RETRIEVE CONTEXT
+    const { data: settings } = await supabase
+      .from("user_settings")
+      .select("system_instruction, model")
+      .eq("user_id", profile.id)
+      .single()
+
+    const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o"])
+    const modelToUse = ALLOWED_MODELS.has(settings?.model)
+      ? settings.model
+      : "gpt-4o-mini"
+
+    /* ───────────────────────────── */
+    /* LANGUAGE */
+/* ───────────────────────────── */
+    const detectedLang = detectLanguage(incomingMsg)
+    const languageInstruction = {
+      en: "Reply in English.",
+      ms: "Balas dalam Bahasa Malaysia.",
+      zh: "请用中文回复。"
+    }[detectedLang]
+
+    /* ───────────────────────────── */
+    /* RAG */
+/* ───────────────────────────── */
     let context = ""
     try {
-        const embeddingResp = await openai.embeddings.create({ model: "text-embedding-3-small", input: incomingMsg, dimensions: 768 })
-        const embedding = embeddingResp.data[0].embedding
-        const { data: chunks } = await supabase.rpc('match_knowledge', { 
-            query_embedding: embedding, match_threshold: 0.5, match_count: 3 
-        })
-        if (chunks && chunks.length > 0) context = chunks.map(c => c.content).join("\\n\\n")
-    } catch (err) { console.error("RAG Error:", err) }
+      const embeddingResp = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: incomingMsg,
+        dimensions: 768
+      })
 
-    // 3. FETCH HISTORY
-    const { data: historyData } = await supabase.from('messages')
-        .select('text, sender')
-        .eq('user_id', profile.id)
-        .eq('phone', senderPhone)
-        .order('created_at', { ascending: false })
-        .limit(10)
-    
-    const chatHistory = (historyData || []).reverse().map(m => ({
-        role: m.sender === 'user' ? 'user' : 'assistant',
-        content: m.text
-    }))
+      const { data: chunks } = await supabase.rpc("match_knowledge", {
+        query_embedding: embeddingResp.data[0].embedding,
+        match_threshold: 0.5,
+        match_count: 3
+      })
 
-    // 4. GENERATE AI RESPONSE
-    const now = new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    const fullPrompt = buildSystemPrompt(systemInstruction, context, now)
-
-    const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-            { role: "system", content: fullPrompt },
-            ...chatHistory,
-            { role: "user", content: incomingMsg }
-        ],
-        temperature: 0.3,
-        response_format: { type: "json_object" }
-    })
-
-    const aiContent = JSON.parse(completion.choices[0].message.content)
-    const { intent, reply, action } = aiContent
-
-    // 5. DB: INSERT USER MESSAGE (Logged as processed)
-    await supabase.from('messages').insert({
-        user_id: profile.id, text: incomingMsg, sender: 'user', direction: 'inbound', phone: senderPhone, intent_tag: intent
-    })
-
-    // 6. DB: INSERT BOT REPLY
-    await supabase.from('messages').insert({
-        user_id: profile.id, text: reply, sender: 'bot', direction: 'outbound', phone: senderPhone
-    })
-
-    // 7. CRM ACTIONS (Leads)
-    // Check if lead exists
-    const { data: lead } = await supabase.from('leads').select('id, tags').match({ user_id: profile.id, phone: senderPhone }).maybeSingle()
-    
-    let leadUpdates = { last_contacted_at: new Date().toISOString() }
-    
-    if (!lead) {
-        // Create new lead if not exists
-        await supabase.from('leads').insert({
-            user_id: profile.id, name: 'Lead ' + senderPhone, phone: senderPhone, status: 'New', ...leadUpdates
-        })
-    } else {
-        // Update existing lead based on Action
-        if (action?.type === 'SCHEDULE_VIEWING' || action?.type === 'RESCHEDULE_APPOINTMENT') {
-            leadUpdates.status = 'Proposal'
-            leadUpdates.ai_analysis = \`Booking: \${action.reason}\`
-            if (action.parameters?.appointmentDate) {
-                leadUpdates.next_appointment = action.parameters.appointmentDate
-            }
-        }
-        if (action?.type === 'CANCEL_APPOINTMENT') {
-            leadUpdates.next_appointment = null
-            leadUpdates.status = 'Qualified' // Revert to qualified
-            leadUpdates.ai_analysis = 'Appointment cancelled by user.'
-        }
-        if (action?.parameters?.propertyInterest) {
-            const newTag = action.parameters.propertyInterest
-            const tags = lead.tags || []
-            if (!tags.includes(newTag)) leadUpdates.tags = [...tags, newTag]
-        }
-        
-        await supabase.from('leads').update(leadUpdates).eq('id', lead.id)
+      if (chunks?.length) {
+        context = chunks.map((c: any) => c.content).join("\\n\\n")
+      }
+    } catch (e) {
+      console.error("RAG error", e)
     }
 
-    // 8. RETURN TWIML (To send reply via Twilio)
-    return new Response(
-      \`<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>\${reply}</Body></Message></Response>\`,
-      { headers: { "Content-Type": "text/xml" } }
+    /* ───────────────────────────── */
+    /* CHAT HISTORY */
+/* ───────────────────────────── */
+    const { data: history } = await supabase
+      .from("messages")
+      .select("text, sender")
+      .eq("user_id", profile.id)
+      .eq("phone", senderPhone)
+      .order("created_at", { ascending: false })
+      .limit(10)
+
+    const messages = [
+      {
+        role: "system",
+        content: buildSystemPrompt(
+          \`\${settings?.system_instruction || ""}\\n\${languageInstruction}\`,
+          context,
+          new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        )
+      },
+      ...(history || []).reverse().map((m: any) => ({
+        role: m.sender === "user" ? "user" : "assistant",
+        content: m.text
+      })),
+      { role: "user", content: incomingMsg }
+    ]
+
+    /* ───────────────────────────── */
+    /* OPENAI */
+/* ───────────────────────────── */
+    const completion = await openaiWithRetry(() =>
+      openai.chat.completions.create({
+        model: modelToUse,
+        messages,
+        temperature: 0.3,
+        response_format: { type: "json_object" }
+      })
     )
 
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 400 })
+    const rawContent =
+      completion.choices?.[0]?.message?.content || ""
+
+    const aiContent = safeParseAIJson(rawContent)
+
+    /* ───────────────────────────── */
+    /* CRM UPDATES (LEADS) */
+    /* ───────────────────────────── */
+    try {
+        const action = aiContent.action;
+        if (action && action.type !== 'NONE') {
+            // Find existing lead
+            const { data: lead } = await supabase
+                .from('leads')
+                .select('id, tags, status')
+                .eq('user_id', profile.id)
+                .eq('phone', senderPhone)
+                .maybeSingle();
+
+            if (lead) {
+                const updates: any = {};
+                
+                // 1. Handle Booking / Schedule / Request
+                if (['SCHEDULE_VIEWING', 'REQUEST_VIEWING', 'RESCHEDULE_APPOINTMENT'].includes(action.type)) {
+                    updates.status = 'Proposal';
+                    updates.ai_analysis = \`Booking Action: \${action.reason}\`;
+                    if (action.parameters?.appointmentDate) {
+                        updates.next_appointment = action.parameters.appointmentDate;
+                    }
+                }
+
+                // 2. Handle Cancellation
+                if (action.type === 'CANCEL_APPOINTMENT') {
+                    updates.status = 'Qualified';
+                    updates.next_appointment = null;
+                    updates.ai_analysis = \`Cancelled: \${action.reason}\`;
+                }
+
+                // 3. Handle Property Interest (Tags)
+                if (action.parameters?.propertyInterest) {
+                    const newTag = action.parameters.propertyInterest;
+                    const currentTags = lead.tags || [];
+                    // Simple check to avoid duplicates
+                    if (!currentTags.some((t: string) => t.toLowerCase() === newTag.toLowerCase())) {
+                        updates.tags = [...currentTags, newTag];
+                        updates.ai_analysis = (updates.ai_analysis || '') + \` | Interested in: \${newTag}\`;
+                    }
+                }
+
+                // 4. Update Lead if needed
+                if (Object.keys(updates).length > 0) {
+                    await supabase
+                        .from('leads')
+                        .update(updates)
+                        .eq('id', lead.id);
+                }
+            } else {
+               // Optional: If lead doesn't exist yet (handled by trigger usually), 
+               // we could create it here, but trigger is safer.
+            }
+        }
+    } catch (crmErr) {
+        console.error("CRM Update Error:", crmErr);
+    }
+
+    /* ───────────────────────────── */
+    /* LOG MESSAGES */
+/* ───────────────────────────── */
+    await supabase.from("messages").insert([
+      {
+        user_id: profile.id,
+        phone: senderPhone,
+        sender: "user",
+        direction: "inbound",
+        text: incomingMsg,
+        intent_tag: aiContent.intent
+      },
+      {
+        user_id: profile.id,
+        phone: senderPhone,
+        sender: "bot",
+        direction: "outbound",
+        text: aiContent.reply
+      }
+    ])
+
+    /* ───────────────────────────── */
+    /* TWILIO RESPONSE */
+/* ───────────────────────────── */
+    return new Response(
+      \`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>
+    <Body>\${aiContent.reply}</Body>
+  </Message>
+</Response>\`,
+      { headers: { "Content-Type": "text/xml; charset=utf-8" } }
+    )
+
+  } catch (err: any) {
+    console.error("Edge Function Error:", err)
+    return new Response("Error", { status: 400 })
   }
 })
 `;
@@ -334,6 +553,22 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
                             Name: <code>OPENAI_API_KEY</code>
                             <br/>
                             Value: <code>sk-...</code> (Your OpenAI Key)
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="border border-purple-200 bg-purple-50 text-slate-900 shadow-sm">
+                    <CardHeader>
+                        <CardTitle className="text-purple-700">Optional: Document Generator</CardTitle>
+                        <CardDescription className="text-purple-600/70">
+                            Deploy this to enable auto-generation of SPAs and Invoices.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-purple-300 font-mono border border-slate-800 max-h-[300px] shadow-inner"><pre>{DOC_GEN_CODE}</pre></div>
+                        <Button size="sm" className="mt-2 bg-purple-600 hover:bg-purple-500 text-white" onClick={() => navigator.clipboard.writeText(DOC_GEN_CODE)}>Copy Generator Code</Button>
+                        <div className="mt-2 text-xs text-slate-500">
+                            Deploy command: <code className="bg-slate-100 px-1 rounded border border-slate-200">supabase functions deploy generate-document --no-verify-jwt</code>
                         </div>
                     </CardContent>
                 </Card>

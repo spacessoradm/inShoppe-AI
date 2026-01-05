@@ -150,7 +150,7 @@ const AuthPage: React.FC = () => {
             </Button>
           </form>
 
-          <div className="mt-8 space-y-2">
+          <div className="mt-8 space-y-2 hidden">
              <div className="flex items-center gap-1 text-sm text-slate-600 font-medium">
                 {isSignUp ? "Already have an account?" : "Don't have an account?"}
                 <span onClick={toggleMode} className="text-[#435372] font-bold cursor-pointer hover:underline ml-1">

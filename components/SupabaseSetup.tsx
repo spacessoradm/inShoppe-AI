@@ -133,7 +133,30 @@ create table if not exists user_settings (
   updated_at timestamptz default now()
 );
 
--- 9. Vector Search Function
+-- 9. DOCUMENT AUTOMATION ENGINE TABLES
+create table if not exists document_templates (
+  id uuid default gen_random_uuid() primary key,
+  organization_id uuid references organizations(id),
+  name text not null,
+  type text not null, -- 'SPA', 'Invoice', 'Quotation'
+  file_path text, -- Path in storage
+  required_fields text[], -- Array of field names like ['buyer.name', 'property.price']
+  is_default boolean default false,
+  created_at timestamptz default now()
+);
+
+create table if not exists generated_documents (
+  id uuid default gen_random_uuid() primary key,
+  organization_id uuid references organizations(id),
+  lead_id bigint references leads(id),
+  template_id uuid references document_templates(id),
+  status text default 'draft', -- 'draft', 'generated', 'sent'
+  file_url text,
+  metadata jsonb, -- The extracted data used to generate
+  created_at timestamptz default now()
+);
+
+-- 10. Vector Search Function
 create or replace function match_knowledge (
   query_embedding vector(768),
   match_threshold float,
@@ -159,7 +182,7 @@ begin
 end;
 $$;
 
--- 10. Enable RLS
+-- 11. Enable RLS
 alter table profiles enable row level security;
 alter table organizations enable row level security;
 alter table messages enable row level security;
@@ -167,8 +190,10 @@ alter table leads enable row level security;
 alter table knowledge enable row level security;
 alter table early_access_signups enable row level security;
 alter table user_settings enable row level security;
+alter table document_templates enable row level security;
+alter table generated_documents enable row level security;
 
--- 11. RLS Policies
+-- 12. RLS Policies
 
 -- Profiles
 drop policy if exists "Public profiles access" on profiles;
@@ -226,11 +251,21 @@ drop policy if exists "Users can manage own settings" on user_settings;
 create policy "Users can manage own settings" on user_settings
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+-- Document Templates (Org Shared)
+drop policy if exists "Org members can manage templates" on document_templates;
+create policy "Org members can manage templates" on document_templates
+  for all using (organization_id in (select organization_id from profiles where profiles.id = auth.uid()));
+
+-- Generated Documents (Org Shared)
+drop policy if exists "Org members can manage documents" on generated_documents;
+create policy "Org members can manage documents" on generated_documents
+  for all using (organization_id in (select organization_id from profiles where profiles.id = auth.uid()));
+
 -- Signups (Public)
 drop policy if exists "Public insert signups" on early_access_signups;
 create policy "Public insert signups" on early_access_signups for insert with check (true);
 
--- 12. AUTOMATIC ONBOARDING TRIGGER
+-- 13. AUTOMATIC ONBOARDING TRIGGER
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -271,7 +306,7 @@ create trigger on_auth_user_created
   for each row
   execute procedure public.handle_new_user();
 
--- 13. AUTO CREATE LEADS TRIGGER
+-- 14. AUTO CREATE LEADS TRIGGER
 create or replace function public.auto_create_lead_from_message()
 returns trigger
 language plpgsql
@@ -314,7 +349,7 @@ create trigger on_message_received
   for each row
   execute procedure public.auto_create_lead_from_message();
 
--- 14. ENABLE REALTIME PUBLICATION
+-- 15. ENABLE REALTIME PUBLICATION
 -- Use DO block to safely check and add tables without errors
 do $$
 begin
@@ -324,7 +359,14 @@ begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'leads') then
     alter publication supabase_realtime add table leads;
   end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'generated_documents') then
+    alter publication supabase_realtime add table generated_documents;
+  end if;
 end $$;
+
+-- 16. INIT DEFAULT TEMPLATE (Optional - For demo)
+-- This part is tricky without an actual file, so we skip it for the SQL script.
+-- Instead, the App will have a built-in default logic.
 `;
 
 const SupabaseSetup: React.FC = () => {

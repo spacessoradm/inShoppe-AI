@@ -10,6 +10,7 @@ import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Lead } from '../types';
 import { analyzeLeadPotential } from '../services/aiEngine';
+import { extractDocumentData, mockGenerateDocument } from '../services/documentEngine';
 
 const statusColors: Record<string, string> = {
     'New': 'bg-blue-500/10 text-blue-400 border-blue-500/20',
@@ -28,7 +29,7 @@ const getScoreColor = (score?: number) => {
 };
 
 const CRMPage: React.FC = () => {
-    const { user } = useAuth();
+    const { user, organization } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
     const [leads, setLeads] = useState<Lead[]>([]);
     const [loading, setLoading] = useState(true);
@@ -50,6 +51,7 @@ const CRMPage: React.FC = () => {
     
     const [saving, setSaving] = useState(false);
     const [analyzingId, setAnalyzingId] = useState<number | null>(null);
+    const [generatingDoc, setGeneratingDoc] = useState(false);
 
     // Helpers
     const showNotification = (type: 'success'|'error', message: string) => {
@@ -231,6 +233,58 @@ const CRMPage: React.FC = () => {
             showNotification('error', 'Analysis failed');
         } finally {
             setAnalyzingId(null);
+        }
+    };
+
+    const handleGenerateSPA = async () => {
+        if (!editingLeadId || !supabase || !user || !organization) return;
+        setGeneratingDoc(true);
+        
+        try {
+            // 1. Fetch Chat History
+            const { data: messages } = await supabase
+                .from('messages')
+                .select('text, sender')
+                .eq('user_id', user.id)
+                .eq('phone', formData.phone)
+                .order('created_at', { ascending: true })
+                .limit(50);
+            
+            const chatHistory = (messages || []).map(m => ({
+                role: m.sender === 'user' ? 'user' : 'assistant',
+                content: m.text
+            }));
+
+            // 2. Extract Data using AI
+            const apiKey = (import.meta as any).env.VITE_OPENAI_API_KEY || localStorage.getItem('openai_api_key');
+            const docData = await extractDocumentData(
+                chatHistory, 
+                'SPA', 
+                { name: formData.name, email: formData.email, phone: formData.phone },
+                apiKey
+            );
+
+            // 3. Check for missing critical fields
+            const missing = docData.missing_fields || [];
+            if (missing.length > 0) {
+                showNotification('error', `Extraction incomplete. Missing: ${missing.join(', ')}`);
+                // Proceed anyway for MVP testing, but ideally prompt user
+            }
+
+            // 4. Generate Document (Mocked/Edge)
+            const result = await mockGenerateDocument('SPA', docData, editingLeadId, organization.id);
+            
+            if (result.success) {
+                showNotification('success', 'SPA Generated Successfully!');
+                // Optional: Open document URL in new tab
+                window.open(result.url, '_blank');
+            }
+
+        } catch (e: any) {
+            console.error("Doc Generation Error:", e);
+            showNotification('error', `Failed: ${e.message}`);
+        } finally {
+            setGeneratingDoc(false);
         }
     };
 
@@ -521,7 +575,34 @@ const CRMPage: React.FC = () => {
                                 <option value="Lost">Lost</option>
                             </select>
                         </div>
-                        <div className="flex justify-end pt-4">
+                        
+                        {/* DOCUMENT GENERATION SECTION (Only in Edit Mode) */}
+                        {isEditModalOpen && (
+                            <div className="border-t border-slate-200 pt-4 mt-2">
+                                <h4 className="text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                                    <FileIcon className="w-4 h-4 text-slate-500" />
+                                    Document Engine
+                                </h4>
+                                <Button 
+                                    type="button"
+                                    onClick={handleGenerateSPA} 
+                                    disabled={generatingDoc || !formData.phone}
+                                    variant="outline" 
+                                    className="w-full justify-between bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100 hover:border-purple-300"
+                                >
+                                    {generatingDoc ? 'Extracting & Generating...' : 'Draft SPA Agreement'}
+                                    <SparklesIcon className="w-4 h-4 text-purple-500" />
+                                </Button>
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                    Extracts details from chat history to auto-fill.
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="flex justify-end pt-4 gap-2 border-t border-slate-100 mt-2">
+                            <Button type="button" variant="ghost" onClick={() => { setIsAddModalOpen(false); setIsEditModalOpen(false); }}>
+                                Cancel
+                            </Button>
                             <Button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white" disabled={saving}>
                                 {saving ? 'Saving...' : (isEditModalOpen ? 'Update Lead' : 'Create Lead')}
                             </Button>
@@ -587,6 +668,12 @@ function BellIcon(props: React.SVGProps<SVGSVGElement>) {
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
             <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
         </svg>
+    )
+}
+
+function FileIcon(props: React.SVGProps<SVGSVGElement>) {
+    return (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M12 13h5"/><path d="M12 17h5"/><path d="M7 13h2"/><path d="M7 17h2"/></svg>
     )
 }
 
