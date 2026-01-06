@@ -291,7 +291,7 @@ const SolvingAnimation: React.FC = () => {
   );
 };
 
-// --- Animation: Action Engine (Brain to Action) (Light Theme) ---
+// --- Animation: Action Engine (Brain to Action) (Light Theme - Fixed Layout) ---
 const ActionEngineAnimation: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -315,6 +315,17 @@ const ActionEngineAnimation: React.FC = () => {
     };
     window.addEventListener('resize', resize);
     resize();
+
+    // Helper to draw rounded rects manually (safer cross-browser)
+    const drawRoundedRect = (x: number, y: number, w: number, h: number, r: number) => {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    };
 
     const COLORS = {
         BLUE: { main: '#3b82f6', glow: 'rgba(59, 130, 246, 0.4)' },
@@ -346,7 +357,7 @@ const ActionEngineAnimation: React.FC = () => {
       const centerY = height / 2;
       const startX = width * 0.15;
       const brainX = width * 0.5;
-      const endX = width * 0.85;
+      const endX = width * 0.75; // Adjusted to leave room for text
 
       const actions = [
         { label: "Auto Reply", y: centerY - 80 },
@@ -397,8 +408,7 @@ const ActionEngineAnimation: React.FC = () => {
         ctx.fillStyle = COLORS.WHITE;
         ctx.shadowColor = 'rgba(0,0,0,0.1)';
         ctx.shadowBlur = 5;
-        ctx.beginPath();
-        ctx.roundRect(curX - 25, centerY - 18, 50, 36, 8);
+        drawRoundedRect(curX - 25, centerY - 18, 50, 36, 8);
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.strokeStyle = '#e2e8f0';
@@ -495,6 +505,17 @@ const ProductAnimation: React.FC = () => {
     window.addEventListener('resize', resize);
     resize();
 
+    // Helper for rounded rects
+    const drawRoundedRect = (x: number, y: number, w: number, h: number, r: number) => {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    };
+
     const BRAND = ACCENT_COLOR;
     const THREAD_HEIGHT = 60;
     const GAP = 10;
@@ -544,8 +565,7 @@ const ProductAnimation: React.FC = () => {
                  ctx.lineWidth = 1;
              }
              
-             ctx.beginPath();
-             ctx.roundRect(x, y, w, THREAD_HEIGHT, 8);
+             drawRoundedRect(x, y, w, THREAD_HEIGHT, 8);
              ctx.fill();
              ctx.shadowBlur = 0; // Clear shadow
              ctx.shadowOffsetY = 0;
@@ -563,8 +583,7 @@ const ProductAnimation: React.FC = () => {
                  const tagOpacity = Math.min(1, (phase - 0.3) * 5);
                  ctx.globalAlpha = tagOpacity;
                  ctx.fillStyle = t.color;
-                 ctx.beginPath();
-                 ctx.roundRect(x + w - 70, y + 15, 60, 16, 4);
+                 drawRoundedRect(x + w - 70, y + 15, 60, 16, 4);
                  ctx.fill();
                  ctx.fillStyle = '#fff';
                  ctx.font = 'bold 9px Inter';
@@ -585,8 +604,7 @@ const ProductAnimation: React.FC = () => {
             ctx.shadowColor = 'rgba(0,0,0,0.1)';
             ctx.shadowBlur = 20;
             
-            ctx.beginPath();
-            ctx.roundRect(panelX, 60, panelW, height - 120, 12);
+            drawRoundedRect(panelX, 60, panelW, height - 120, 12);
             ctx.fill();
             ctx.shadowBlur = 0;
             ctx.stroke();
@@ -743,6 +761,17 @@ const BrandAnimation: React.FC = () => {
       };
       window.addEventListener('resize', resize);
       resize();
+
+      // Helper for rounded rects
+      const drawRoundedRect = (x: number, y: number, w: number, h: number, r: number) => {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+      };
   
       const BRAND = ACCENT_COLOR;
       const INDUSTRIES = [
@@ -775,8 +804,7 @@ const BrandAnimation: React.FC = () => {
           ctx.fillStyle = '#ffffff'; 
           ctx.shadowColor = 'rgba(0,0,0,0.1)';
           ctx.shadowBlur = 20;
-          ctx.beginPath();
-          ctx.roundRect(phoneX, phoneY, phoneW, phoneH, 24);
+          drawRoundedRect(phoneX, phoneY, phoneW, phoneH, 24);
           ctx.fill();
           ctx.shadowBlur = 0;
           ctx.strokeStyle = '#e2e8f0'; // Slate-200
@@ -793,8 +821,7 @@ const BrandAnimation: React.FC = () => {
               const slideIn = Math.min(1, (phaseProgress - 0.1) * 5);
               ctx.globalAlpha = slideIn;
               ctx.fillStyle = '#f1f5f9'; // Slate-100
-              ctx.beginPath();
-              ctx.roundRect(phoneX + 15, chatY, 120, 34, 12);
+              drawRoundedRect(phoneX + 15, chatY, 120, 34, 12);
               ctx.fill();
               ctx.globalAlpha = 1;
           }
@@ -803,8 +830,7 @@ const BrandAnimation: React.FC = () => {
                const slideIn = Math.min(1, (phaseProgress - 0.5) * 5);
                ctx.globalAlpha = slideIn;
                ctx.fillStyle = BRAND;
-               ctx.beginPath();
-               ctx.roundRect(phoneX + phoneW - 135, chatY + 50, 120, 40, 12);
+               drawRoundedRect(phoneX + phoneW - 135, chatY + 50, 120, 40, 12);
                ctx.fill();
                ctx.globalAlpha = 1;
           }

@@ -161,25 +161,69 @@ export const mockGenerateDocument = async (
 ) => {
     if (!supabase) throw new Error("Supabase not initialized");
 
-    // 1. Create Placeholder Record
+    // FIX: Get or Create a valid Template ID to satisfy Foreign Key Constraint
+    let templateId: string | null = null;
+
+    // 1. Try to find ANY existing template for this org
+    const { data: existingTemplates } = await supabase
+        .from('document_templates')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .limit(1);
+
+    if (existingTemplates && existingTemplates.length > 0) {
+        templateId = existingTemplates[0].id;
+    } else {
+        // 2. Create a default placeholder template if none exists
+        console.log("No templates found. Creating default mock template...");
+        const { data: newTemplate, error: templateError } = await supabase
+            .from('document_templates')
+            .insert({
+                organization_id: organizationId,
+                name: `Default ${templateType} Template`,
+                type: templateType,
+                file_path: 'templates/default.docx',
+                is_default: true
+            })
+            .select('id')
+            .single();
+        
+        if (templateError) {
+            console.error("Failed to create default template:", templateError);
+            throw new Error(`Database Error: Could not create a required Template record. ${templateError.message}`);
+        }
+        
+        if (newTemplate) {
+            templateId = newTemplate.id;
+        }
+    }
+
+    if (!templateId) {
+        throw new Error("System Error: Unable to resolve a valid Document Template ID.");
+    }
+
+    // 3. Create Record
     const { data: docRecord, error } = await supabase
         .from('generated_documents')
         .insert({
             organization_id: organizationId,
             lead_id: leadId,
-            template_id: '00000000-0000-0000-0000-000000000000', // Dummy ID
+            template_id: templateId,
             status: 'processing',
             metadata: documentData
         })
         .select()
         .single();
         
-    if (error) throw error;
+    if (error) {
+        console.error("Insert Generated Doc Error:", error);
+        throw error;
+    }
 
-    // 2. Simulate Delay
+    // 4. Simulate Delay
     await new Promise(r => setTimeout(r, 2000));
 
-    // 3. "Generate" (Just return a dummy link)
+    // 5. "Generate" (Just return a dummy link)
     const mockUrl = `https://example.com/documents/SPA_${documentData.buyer?.name?.replace(/\s+/g, '_') || 'Draft'}.docx`;
     
     await supabase
