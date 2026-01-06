@@ -52,6 +52,7 @@ const CRMPage: React.FC = () => {
     const [saving, setSaving] = useState(false);
     const [analyzingId, setAnalyzingId] = useState<number | null>(null);
     const [generatingDoc, setGeneratingDoc] = useState(false);
+    const [generatedDocUrl, setGeneratedDocUrl] = useState<string | null>(null);
 
     // Helpers
     const showNotification = (type: 'success'|'error', message: string) => {
@@ -133,6 +134,7 @@ const CRMPage: React.FC = () => {
 
     const handleOpenEdit = (lead: Lead) => {
         setEditingLeadId(lead.id);
+        setGeneratedDocUrl(null); // Reset doc state on new open
         setFormData({
             name: lead.name,
             email: lead.email || '',
@@ -239,6 +241,7 @@ const CRMPage: React.FC = () => {
     const handleGenerateSPA = async () => {
         if (!editingLeadId || !supabase || !user || !organization) return;
         setGeneratingDoc(true);
+        setGeneratedDocUrl(null);
         
         try {
             // 1. Fetch Chat History
@@ -268,7 +271,6 @@ const CRMPage: React.FC = () => {
             const missing = docData.missing_fields || [];
             if (missing.length > 0) {
                 showNotification('error', `Extraction incomplete. Missing: ${missing.join(', ')}`);
-                // Proceed anyway for MVP testing, but ideally prompt user
             }
 
             // 4. Generate Document (Mocked/Edge)
@@ -276,8 +278,7 @@ const CRMPage: React.FC = () => {
             
             if (result.success) {
                 showNotification('success', 'SPA Generated Successfully!');
-                // Optional: Open document URL in new tab
-                window.open(result.url, '_blank');
+                setGeneratedDocUrl(result.url); // Save URL for display/send
             }
 
         } catch (e: any) {
@@ -285,6 +286,30 @@ const CRMPage: React.FC = () => {
             showNotification('error', `Failed: ${e.message}`);
         } finally {
             setGeneratingDoc(false);
+        }
+    };
+
+    const handleSendDocument = async () => {
+        if (!generatedDocUrl || !formData.phone || !user || !supabase) return;
+        
+        try {
+            // Simulate sending message to WhatsApp by adding to messages table
+            const { error } = await supabase.from('messages').insert({
+                user_id: user.id,
+                text: `Hi ${formData.name}, please find the draft SPA agreement attached here: ${generatedDocUrl}`,
+                sender: 'bot',
+                direction: 'outbound',
+                phone: formData.phone,
+                intent_tag: 'Document Sent'
+            });
+            
+            if (error) throw error;
+            
+            showNotification('success', `Document sent to ${formData.phone}!`);
+            
+        } catch (e: any) {
+            console.error("Send Error:", e);
+            showNotification('error', 'Failed to send document.');
         }
     };
 
@@ -583,19 +608,48 @@ const CRMPage: React.FC = () => {
                                     <FileIcon className="w-4 h-4 text-slate-500" />
                                     Document Engine
                                 </h4>
-                                <Button 
-                                    type="button"
-                                    onClick={handleGenerateSPA} 
-                                    disabled={generatingDoc || !formData.phone}
-                                    variant="outline" 
-                                    className="w-full justify-between bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100 hover:border-purple-300"
-                                >
-                                    {generatingDoc ? 'Extracting & Generating...' : 'Draft SPA Agreement'}
-                                    <SparklesIcon className="w-4 h-4 text-purple-500" />
-                                </Button>
-                                <p className="text-[10px] text-slate-400 mt-1">
-                                    Extracts details from chat history to auto-fill.
-                                </p>
+                                
+                                {!generatedDocUrl ? (
+                                    <>
+                                        <Button 
+                                            type="button"
+                                            onClick={handleGenerateSPA} 
+                                            disabled={generatingDoc || !formData.phone}
+                                            variant="outline" 
+                                            className="w-full justify-between bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100 hover:border-purple-300"
+                                        >
+                                            {generatingDoc ? 'Extracting & Generating...' : 'Draft SPA Agreement'}
+                                            <SparklesIcon className="w-4 h-4 text-purple-500" />
+                                        </Button>
+                                        <p className="text-[10px] text-slate-400 mt-1">
+                                            Extracts details from chat history to auto-fill.
+                                        </p>
+                                    </>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        <div className="p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-700 flex items-center gap-2">
+                                            <div className="w-4 h-4 rounded-full bg-green-200 flex items-center justify-center text-[10px]">✓</div>
+                                            Document Ready
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <Button 
+                                                type="button"
+                                                variant="outline"
+                                                className="flex-1 border-slate-300"
+                                                onClick={() => window.open(generatedDocUrl, '_blank')}
+                                            >
+                                                View Doc
+                                            </Button>
+                                            <Button 
+                                                type="button"
+                                                className="flex-1 bg-green-600 hover:bg-green-500 text-white"
+                                                onClick={handleSendDocument}
+                                            >
+                                                Send to WhatsApp
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 

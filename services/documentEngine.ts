@@ -223,8 +223,9 @@ export const mockGenerateDocument = async (
     // 4. Simulate Delay
     await new Promise(r => setTimeout(r, 2000));
 
-    // 5. "Generate" (Just return a dummy link)
-    const mockUrl = `https://example.com/documents/SPA_${documentData.buyer?.name?.replace(/\s+/g, '_') || 'Draft'}.docx`;
+    // 5. "Generate" (Use a real accessible PDF URL for testing purposes)
+    // This allows the user to actually open the link and see "a document".
+    const mockUrl = `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf?buyer=${encodeURIComponent(documentData.buyer?.name || 'Client')}`;
     
     await supabase
         .from('generated_documents')
