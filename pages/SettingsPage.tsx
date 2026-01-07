@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -7,6 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import { Badge } from '../components/ui/Badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
 import { PLAN_LIMITS } from '../types';
+import { supabase } from '../services/supabase';
+import { cn } from '../lib/utils';
 
 // --- CONFIGURATION START ---
 const getStripeKey = () => {
@@ -36,10 +37,91 @@ const SettingsPage: React.FC = () => {
         { id: '2', name: 'General Invoice', type: 'Invoice', file: 'invoice_gen.docx', default: false }
     ]);
 
-    const handleUploadTemplate = () => {
-        // Mock Upload
-        const newTemplate = { id: Date.now().toString(), name: 'New Template', type: 'Custom', file: 'uploaded_file.docx', default: false };
-        setTemplates([...templates, newTemplate]);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleUploadClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setUploading(true);
+        try {
+            if (supabase && organization) {
+                // 1. Upload to Storage
+                // Use a folder per organization to keep things clean
+                const fileExt = file.name.split('.').pop()?.toLowerCase();
+                const fileName = `templates/${organization.id}/${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
+                
+                // Attempt upload
+                const { error: uploadError } = await supabase.storage
+                    .from('documents') 
+                    .upload(fileName, file);
+
+                if (uploadError) {
+                    console.error("Storage Upload Error:", uploadError);
+                    throw new Error(`Storage Error: ${uploadError.message}`);
+                }
+
+                // 2. Determine type based on extension
+                let docType = 'Custom';
+                if (fileExt === 'pdf') docType = 'PDF';
+                else if (['xls', 'xlsx'].includes(fileExt || '')) docType = 'Excel';
+                else if (['doc', 'docx'].includes(fileExt || '')) docType = 'Word';
+
+                // 3. Insert into DB
+                const { data: newDoc, error: dbError } = await supabase
+                    .from('document_templates')
+                    .insert({
+                        organization_id: organization.id,
+                        name: file.name,
+                        type: docType,
+                        file_path: fileName,
+                        is_default: false
+                    })
+                    .select()
+                    .single();
+
+                if (dbError) throw dbError;
+
+                // 4. Update UI
+                if (newDoc) {
+                    setTemplates([...templates, { 
+                        id: newDoc.id, 
+                        name: newDoc.name, 
+                        type: newDoc.type, 
+                        file: newDoc.name, // Display name
+                        default: newDoc.is_default 
+                    }]);
+                }
+            } else {
+                // Demo Mode Fallback
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const fileExt = file.name.split('.').pop()?.toLowerCase();
+                let docType = 'Custom';
+                if (fileExt === 'pdf') docType = 'PDF';
+                else if (['xls', 'xlsx'].includes(fileExt || '')) docType = 'Excel';
+                else if (['doc', 'docx'].includes(fileExt || '')) docType = 'Word';
+
+                const newTemplate = { 
+                    id: Date.now().toString(), 
+                    name: file.name, 
+                    type: docType, 
+                    file: file.name, 
+                    default: false 
+                };
+                setTemplates([...templates, newTemplate]);
+            }
+        } catch (error: any) {
+            console.error('Upload failed:', error);
+            alert(`Upload failed: ${error.message}`);
+        } finally {
+            setUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
     };
 
     return (
@@ -269,8 +351,28 @@ const SettingsPage: React.FC = () => {
                     <TabsContent value="documents" className="space-y-8 animate-in fade-in-50 duration-300">
                         <div className="flex justify-between items-center">
                             <h3 className="text-lg font-semibold text-slate-900">Templates</h3>
-                            <Button onClick={handleUploadTemplate} variant="outline" className="bg-white border-slate-300 text-slate-700 hover:bg-slate-50">
-                                Upload .DOCX
+                            
+                            {/* HIDDEN FILE INPUT */}
+                            <input 
+                                type="file" 
+                                ref={fileInputRef} 
+                                onChange={handleFileChange}
+                                className="hidden" 
+                                accept=".docx,.doc,.pdf,.xls,.xlsx"
+                            />
+                            
+                            <Button 
+                                onClick={handleUploadClick} 
+                                variant="outline" 
+                                className="bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                                disabled={uploading}
+                            >
+                                {uploading ? (
+                                    <span className="flex items-center gap-2">
+                                        <span className="h-4 w-4 border-2 border-slate-400 border-t-slate-700 rounded-full animate-spin"></span>
+                                        Uploading...
+                                    </span>
+                                ) : "Upload Document"}
                             </Button>
                         </div>
 
@@ -278,8 +380,14 @@ const SettingsPage: React.FC = () => {
                             {templates.map(t => (
                                 <div key={t.id} className="group flex items-center justify-between p-5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-blue-300 transition-all hover:shadow-md cursor-pointer">
                                     <div className="flex items-center gap-4">
-                                        <div className="h-12 w-12 bg-blue-50 text-blue-600 flex items-center justify-center rounded-lg border border-blue-100 font-bold text-lg">
-                                            W
+                                        <div className={cn(
+                                            "h-12 w-12 flex items-center justify-center rounded-lg border font-bold text-lg",
+                                            t.type === 'Word' || t.type === 'SPA' ? "bg-blue-50 text-blue-600 border-blue-100" :
+                                            t.type === 'Excel' ? "bg-green-50 text-green-600 border-green-100" :
+                                            t.type === 'PDF' ? "bg-red-50 text-red-600 border-red-100" :
+                                            "bg-slate-50 text-slate-600 border-slate-100"
+                                        )}>
+                                            {t.type === 'PDF' ? 'P' : t.type === 'Excel' ? 'X' : 'W'}
                                         </div>
                                         <div>
                                             <p className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">{t.name}</p>
