@@ -57,6 +57,34 @@ const invokeAI = async (action: 'chat' | 'embedding', payload: any, apiKey?: str
     return data;
 };
 
+// --- Helper: Fetch Agent Schedule (Availability Check) ---
+const fetchAgentSchedule = async (userId: string): Promise<string> => {
+    if (!supabase) return "";
+    
+    // We treat the 'leads' table 'next_appointment' column as the source of truth for booked slots.
+    const now = new Date().toISOString();
+    const { data: appointments } = await supabase
+        .from('leads')
+        .select('name, next_appointment')
+        .eq('user_id', userId)
+        .gt('next_appointment', now) // Only future appointments
+        .order('next_appointment', { ascending: true })
+        .limit(20);
+
+    if (!appointments || appointments.length === 0) return "";
+
+    // Format appointments for the LLM
+    // We assume 1 hour duration per slot
+    return appointments.map(appt => {
+        const dateObj = new Date(appt.next_appointment);
+        // Format: "Monday, Jan 15 at 2:00 PM (to 3:00 PM)"
+        const formatted = dateObj.toLocaleString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        });
+        return `- ${formatted} (Booked)`;
+    }).join('\n');
+};
+
 // --- 1. RAG (RETRIEVAL) - Optimized ---
 export const retrieveContext = async (organizationId: string, message: string, apiKey?: string): Promise<string> => {
     try {
@@ -102,6 +130,7 @@ export const retrieveContext = async (organizationId: string, message: string, a
 export const generateStrategicResponse = async (
     userMessage: string, 
     context: string,
+    scheduleContext: string, // NEW: Pass schedule string
     systemInstruction: string,
     chatHistory: ChatMessage[],
     apiKey?: string
@@ -113,7 +142,8 @@ export const generateStrategicResponse = async (
         });
 
         // Build the strict prompt using the helper
-        const systemPrompt = buildRealEstateSystemPrompt(systemInstruction, context, now);
+        // We now pass scheduleContext to the prompt builder
+        const systemPrompt = buildRealEstateSystemPrompt(systemInstruction, context, now, scheduleContext);
 
         const messagesPayload: any[] = [
             { role: "system", content: systemPrompt },
@@ -318,9 +348,6 @@ export const processIncomingMessage = async (
 ) => {
     console.log("[AI Engine] ⚡ Starting optimized pipeline...");
     
-    // Extract phone from history or context if available (needed for scoring)
-    // Note: In a real system, phone is passed explicitly. 
-    
     // OPTIMIZATION 1: Fast Path for Greetings
     const lowerMsg = userMessage.trim().toLowerCase();
     const cleanMsg = lowerMsg.replace(/[^a-z ]/g, '');
@@ -344,10 +371,20 @@ export const processIncomingMessage = async (
         console.log("[AI Engine] ⏩ Greeting detected, skipping RAG.");
     }
 
+    // --- AVAILABILITY CHECK ---
+    // Fetch busy slots for the agent (user_id) to prevent double booking
+    let scheduleContext = "";
+    try {
+        scheduleContext = await fetchAgentSchedule(userId);
+    } catch (e) {
+        console.warn("[AI Engine] Schedule Fetch Error:", e);
+    }
+
     // Step 2: Single-Pass Classification & Generation using Strict Real Estate Logic
     const { intent, reply, action } = await generateStrategicResponse(
         userMessage, 
         context, 
+        scheduleContext, // Pass schedule context
         systemInstruction, 
         chatHistory, 
         apiKey

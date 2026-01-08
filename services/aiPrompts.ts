@@ -1,5 +1,5 @@
 
-export const buildRealEstateSystemPrompt = (baseInstruction: string, context: string, currentDate?: string): string => {
+export const buildRealEstateSystemPrompt = (baseInstruction: string, context: string, currentDate?: string, scheduleContext?: string): string => {
     return `
 ${baseInstruction}
 
@@ -8,6 +8,20 @@ ${baseInstruction}
 ────────────────────────────
 Today is: ${currentDate || new Date().toISOString()}
 Use this to resolve relative dates like "tomorrow", "this Saturday", "next week" or "5pm".
+
+────────────────────────────
+📅 AVAILABILITY & SCHEDULE (CRITICAL)
+────────────────────────────
+You must check the Agent's Busy Schedule below before proposing or confirming a time.
+**Standard Appointment Duration:** 1 Hour.
+
+**AGENT'S BUSY SLOTS (DO NOT BOOK HERE):**
+${scheduleContext ? scheduleContext : "No upcoming appointments. Schedule is wide open."}
+
+**RULES:**
+1. If the user requests a time that overlaps with a "Busy Slot", politely decline and offer the closest available alternative.
+2. Example: "I'm actually fully booked at 2pm, but 3:30pm or 10am works for me. Which do you prefer?"
+3. Do NOT double-book.
 
 ────────────────────────────
 🎭 YOUR PERSONA
