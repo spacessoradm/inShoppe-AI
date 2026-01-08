@@ -1,10 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '../components/ui/Badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../components/ui/Dialog';
+import { Switch } from '../components/ui/Switch';
 import { PLAN_LIMITS } from '../types';
 import { supabase } from '../services/supabase';
 import { cn } from '../lib/utils';
@@ -31,14 +33,60 @@ const SettingsPage: React.FC = () => {
     // Mock current users count
     const currentUsers = 1; 
 
-    // Mock Templates for UI
-    const [templates, setTemplates] = useState([
-        { id: '1', name: 'Standard SPA (Malaysia)', type: 'SPA', file: 'spa_template_v1.docx', default: true },
-        { id: '2', name: 'General Invoice', type: 'Invoice', file: 'invoice_gen.docx', default: false }
-    ]);
+    // Templates State
+    const [templates, setTemplates] = useState<any[]>([]);
+    const [loadingTemplates, setLoadingTemplates] = useState(false);
+
+    // Edit Modal State
+    const [editingTemplate, setEditingTemplate] = useState<any>(null);
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+    const [savingTemplate, setSavingTemplate] = useState(false);
 
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Fetch Templates on Mount
+    useEffect(() => {
+        if (organization && supabase) {
+            fetchTemplates();
+        } else {
+            // Demo Data
+            setTemplates([
+                { id: '1', name: 'Standard SPA (Malaysia)', type: 'SPA', file: 'spa_template_v1.docx', default: true },
+                { id: '2', name: 'General Invoice', type: 'Invoice', file: 'invoice_gen.docx', default: false }
+            ]);
+        }
+    }, [organization]);
+
+    const fetchTemplates = async () => {
+        if (!organization || !supabase) return;
+        setLoadingTemplates(true);
+        try {
+            const { data, error } = await supabase
+                .from('document_templates')
+                .select('*')
+                .eq('organization_id', organization.id)
+                .order('created_at', { ascending: false });
+            
+            if (error) throw error;
+            
+            if (data) {
+                const formatted = data.map(t => ({
+                    id: t.id,
+                    name: t.name,
+                    type: t.type,
+                    file: t.file_path ? t.file_path.split('/').pop() : 'file.docx', // Extract filename
+                    default: t.is_default,
+                    file_path: t.file_path
+                }));
+                setTemplates(formatted);
+            }
+        } catch (error) {
+            console.error("Error fetching templates:", error);
+        } finally {
+            setLoadingTemplates(false);
+        }
+    };
 
     const handleUploadClick = () => {
         fileInputRef.current?.click();
@@ -52,21 +100,16 @@ const SettingsPage: React.FC = () => {
         try {
             if (supabase && organization) {
                 // 1. Upload to Storage
-                // Use a folder per organization to keep things clean
                 const fileExt = file.name.split('.').pop()?.toLowerCase();
                 const fileName = `templates/${organization.id}/${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
                 
-                // Attempt upload
                 const { error: uploadError } = await supabase.storage
                     .from('documents') 
                     .upload(fileName, file);
 
-                if (uploadError) {
-                    console.error("Storage Upload Error:", uploadError);
-                    throw new Error(`Storage Error: ${uploadError.message}`);
-                }
+                if (uploadError) throw new Error(`Storage Error: ${uploadError.message}`);
 
-                // 2. Determine type based on extension
+                // 2. Determine type
                 let docType = 'Custom';
                 if (fileExt === 'pdf') docType = 'PDF';
                 else if (['xls', 'xlsx'].includes(fileExt || '')) docType = 'Excel';
@@ -89,16 +132,17 @@ const SettingsPage: React.FC = () => {
 
                 // 4. Update UI
                 if (newDoc) {
-                    setTemplates([...templates, { 
+                    setTemplates(prev => [{ 
                         id: newDoc.id, 
                         name: newDoc.name, 
                         type: newDoc.type, 
-                        file: newDoc.name, // Display name
-                        default: newDoc.is_default 
-                    }]);
+                        file: newDoc.name, 
+                        default: newDoc.is_default,
+                        file_path: newDoc.file_path
+                    }, ...prev]);
                 }
             } else {
-                // Demo Mode Fallback
+                // Demo Mode
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 const fileExt = file.name.split('.').pop()?.toLowerCase();
                 let docType = 'Custom';
@@ -121,6 +165,96 @@ const SettingsPage: React.FC = () => {
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    // --- Edit Functions ---
+    const handleEditClick = (template: any) => {
+        setEditingTemplate({ ...template });
+        setIsEditModalOpen(true);
+    };
+
+    const handleSaveTemplate = async () => {
+        if (!editingTemplate) return;
+        setSavingTemplate(true);
+
+        try {
+            if (supabase && organization) {
+                // Update DB
+                const { error } = await supabase
+                    .from('document_templates')
+                    .update({ 
+                        name: editingTemplate.name,
+                        is_default: editingTemplate.default
+                    })
+                    .eq('id', editingTemplate.id);
+
+                if (error) throw error;
+
+                // If setting as default, unset others (optional UX)
+                if (editingTemplate.default) {
+                     // In a real app, maybe run a stored procedure or another update to set others is_default=false
+                }
+            }
+
+            // Update Local State
+            setTemplates(prev => prev.map(t => 
+                t.id === editingTemplate.id ? editingTemplate : t
+            ));
+            setIsEditModalOpen(false);
+        } catch (error: any) {
+            console.error("Failed to update template:", error);
+            alert("Failed to update template.");
+        } finally {
+            setSavingTemplate(false);
+        }
+    };
+
+    const handleDeleteTemplate = async () => {
+        if (!editingTemplate) return;
+        if (!confirm("Are you sure you want to delete this template? This cannot be undone.")) return;
+        setSavingTemplate(true);
+
+        try {
+            if (supabase && organization) {
+                // 1. Delete from DB
+                const { error } = await supabase
+                    .from('document_templates')
+                    .delete()
+                    .eq('id', editingTemplate.id);
+                
+                if (error) throw error;
+
+                // 2. Delete from Storage (Optional, good practice)
+                if (editingTemplate.file_path) {
+                    await supabase.storage.from('documents').remove([editingTemplate.file_path]);
+                }
+            }
+
+            setTemplates(prev => prev.filter(t => t.id !== editingTemplate.id));
+            setIsEditModalOpen(false);
+        } catch (error: any) {
+            console.error("Failed to delete template:", error);
+            alert("Failed to delete template. It might be in use.");
+        } finally {
+            setSavingTemplate(false);
+        }
+    };
+
+    const handleDownloadTemplate = async (template: any) => {
+        if (!supabase || !template.file_path) return;
+        try {
+            const { data, error } = await supabase.storage
+                .from('documents')
+                .createSignedUrl(template.file_path, 60); // 60 seconds valid
+            
+            if (error) throw error;
+            if (data?.signedUrl) {
+                window.open(data.signedUrl, '_blank');
+            }
+        } catch (e) {
+            console.error("Download error:", e);
+            alert("Could not download file.");
         }
     };
 
@@ -167,7 +301,6 @@ const SettingsPage: React.FC = () => {
 
                     {/* --- PROFILE TAB --- */}
                     <TabsContent value="profile" className="space-y-8 animate-in fade-in-50 duration-300">
-                        
                         {/* Security Banner */}
                         <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm flex flex-col sm:flex-row sm:items-center gap-6">
                             <div className="relative w-14 h-14 shrink-0 hidden sm:block">
@@ -376,34 +509,43 @@ const SettingsPage: React.FC = () => {
                             </Button>
                         </div>
 
-                        <div className="grid gap-4">
-                            {templates.map(t => (
-                                <div key={t.id} className="group flex items-center justify-between p-5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-blue-300 transition-all hover:shadow-md cursor-pointer">
-                                    <div className="flex items-center gap-4">
-                                        <div className={cn(
-                                            "h-12 w-12 flex items-center justify-center rounded-lg border font-bold text-lg",
-                                            t.type === 'Word' || t.type === 'SPA' ? "bg-blue-50 text-blue-600 border-blue-100" :
-                                            t.type === 'Excel' ? "bg-green-50 text-green-600 border-green-100" :
-                                            t.type === 'PDF' ? "bg-red-50 text-red-600 border-red-100" :
-                                            "bg-slate-50 text-slate-600 border-slate-100"
-                                        )}>
-                                            {t.type === 'PDF' ? 'P' : t.type === 'Excel' ? 'X' : 'W'}
-                                        </div>
-                                        <div>
-                                            <p className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">{t.name}</p>
-                                            <div className="flex items-center gap-2 mt-1">
-                                                <Badge variant="secondary" className="bg-slate-100 text-slate-500 border-slate-200 font-normal">{t.type}</Badge>
-                                                <span className="text-xs text-slate-400">• {t.file}</span>
+                        {loadingTemplates ? (
+                            <div className="py-12 text-center text-slate-500">Loading templates...</div>
+                        ) : (
+                            <div className="grid gap-4">
+                                {templates.map(t => (
+                                    <div key={t.id} className="group flex items-center justify-between p-5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-blue-300 transition-all hover:shadow-md cursor-pointer">
+                                        <div className="flex items-center gap-4">
+                                            <div className={cn(
+                                                "h-12 w-12 flex items-center justify-center rounded-lg border font-bold text-lg",
+                                                t.type === 'Word' || t.type === 'SPA' ? "bg-blue-50 text-blue-600 border-blue-100" :
+                                                t.type === 'Excel' ? "bg-green-50 text-green-600 border-green-100" :
+                                                t.type === 'PDF' ? "bg-red-50 text-red-600 border-red-100" :
+                                                "bg-slate-50 text-slate-600 border-slate-100"
+                                            )}>
+                                                {t.type === 'PDF' ? 'P' : t.type === 'Excel' ? 'X' : 'W'}
+                                            </div>
+                                            <div>
+                                                <p className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">{t.name}</p>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <Badge variant="secondary" className="bg-slate-100 text-slate-500 border-slate-200 font-normal">{t.type}</Badge>
+                                                    <span className="text-xs text-slate-400">• {t.file}</span>
+                                                </div>
                                             </div>
                                         </div>
+                                        <div className="flex items-center gap-3">
+                                            {t.default && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">Default</Badge>}
+                                            {t.file_path && (
+                                                <Button variant="ghost" size="sm" className="text-slate-400 hover:text-blue-600" onClick={() => handleDownloadTemplate(t)} title="Download File">
+                                                    ↓
+                                                </Button>
+                                            )}
+                                            <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-900" onClick={() => handleEditClick(t)}>Edit</Button>
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-3">
-                                        {t.default && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">Default</Badge>}
-                                        <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-900">Edit</Button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                         
                         <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800 flex gap-2 items-start">
                             <span className="text-xl">💡</span>
@@ -463,6 +605,58 @@ const SettingsPage: React.FC = () => {
                         </div>
                     </TabsContent>
                 </Tabs>
+
+                {/* EDIT TEMPLATE MODAL */}
+                <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+                    <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-[425px]">
+                        <DialogHeader>
+                            <DialogTitle>Edit Template</DialogTitle>
+                            <DialogDescription>
+                                Update template details or remove it.
+                            </DialogDescription>
+                        </DialogHeader>
+                        {editingTemplate && (
+                            <div className="grid gap-4 py-4">
+                                <div className="space-y-2">
+                                    <label htmlFor="t-name" className="text-sm font-medium text-slate-700">Template Name</label>
+                                    <Input 
+                                        id="t-name" 
+                                        value={editingTemplate.name} 
+                                        onChange={(e) => setEditingTemplate({...editingTemplate, name: e.target.value})}
+                                        className="bg-white border-slate-300"
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between space-x-2 border border-slate-200 rounded-lg p-3">
+                                    <label htmlFor="t-default" className="text-sm font-medium text-slate-700 flex-1 cursor-pointer">
+                                        Set as Default
+                                        <p className="text-xs text-slate-500 font-normal">Use this template automatically for its type.</p>
+                                    </label>
+                                    <Switch 
+                                        id="t-default" 
+                                        checked={editingTemplate.default}
+                                        onCheckedChange={(checked) => setEditingTemplate({...editingTemplate, default: checked})}
+                                    />
+                                </div>
+                                <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-xs text-slate-500">
+                                    <p className="font-semibold mb-1">File: {editingTemplate.file}</p>
+                                    <p>To update the file content, please delete this template and upload a new version.</p>
+                                </div>
+                            </div>
+                        )}
+                        <DialogFooter className="flex gap-2 sm:justify-between">
+                            <Button variant="destructive" onClick={handleDeleteTemplate} disabled={savingTemplate} className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:text-red-700 hover:border-red-300 shadow-none">
+                                Delete
+                            </Button>
+                            <div className="flex gap-2">
+                                <Button variant="ghost" onClick={() => setIsEditModalOpen(false)}>Cancel</Button>
+                                <Button onClick={handleSaveTemplate} disabled={savingTemplate} className="bg-blue-600 hover:bg-blue-500 text-white">
+                                    {savingTemplate ? 'Saving...' : 'Save Changes'}
+                                </Button>
+                            </div>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+
             </div>
         </div>
     );
