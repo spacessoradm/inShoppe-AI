@@ -9,9 +9,6 @@ import { cn } from '../../lib/utils';
 const DOC_GEN_CODE = `
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-// Note: In a real Deno environment, we would import a docx library compatible with Deno/Web Standards.
-// For this example, we'll simulate the logic or use a text-replacement approach if libraries are heavy.
-// A common approach is using 'docxtemplater' via a CDN that supports Deno, or a simple unzip/xml-replace/zip approach.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,19 +26,13 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // 1. Fetch Template (In a real app, download from Storage)
-    // const { data: templateData } = await supabaseClient.storage.from('documents').download('templates/SPA_Template.docx')
-    
-    // 2. Process Document (Simulated here for brevity)
+    // Simulation of Doc Generation
     console.log("Generating document for:", data.buyer?.name)
     
-    // 3. Upload Result (Simulated)
-    // const { data: uploadData } = await supabaseClient.storage.from('documents').upload(\`generated/\${record_id}.docx\`, generatedBuffer)
-    
-    // 4. Get Public URL
-    const publicUrl = \`https://placeholder-url.com/docs/\${record_id}.docx\` // Replace with actual storage.getPublicUrl
+    // Mock Public URL
+    const publicUrl = \`https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf?id=\${record_id}\`
 
-    // 5. Update Database Record
+    // Update Database Record
     await supabaseClient
       .from('generated_documents')
       .update({ 
@@ -78,120 +69,56 @@ const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 const openAiKey = Deno.env.get("OPENAI_API_KEY") ?? ""
 
 /* ───────────────────────────── */
-/* RESPONSE FORMAT */
+/* CONFIG */
 /* ───────────────────────────── */
 const RESPONSE_FORMAT_JSON = {
   intent: "string",
   reply: "string",
   action: {
-    type: "string | null",
+    type: "SCHEDULE_VIEWING | PROPERTY_INQUIRY | NONE",
     reason: "string | null",
-    parameters: "object | null"
+    parameters: {
+      appointmentDate: "ISO8601 string (e.g. 2024-01-01T10:00:00Z) | null",
+      propertyInterest: "string | null"
+    }
   }
 }
 
 /* ───────────────────────────── */
 /* UTILITIES */
 /* ───────────────────────────── */
-
-// Hard JSON enforcement + auto repair
 function safeParseAIJson(raw: string) {
-  const cleaned = raw
-    .replace(/\`\`\`json/g, "")
-    .replace(/\`\`\`/g, "")
-    .trim()
-
+  const cleaned = raw.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim()
   try {
     return JSON.parse(cleaned)
   } catch {
     try {
       const start = cleaned.indexOf("{")
       const end = cleaned.lastIndexOf("}")
-      if (start !== -1 && end !== -1) {
-        return JSON.parse(cleaned.slice(start, end + 1))
-      }
+      if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1))
     } catch {}
-
     return {
-      intent: "GENERAL_INQUIRY",
+      intent: "General Chat",
       reply: cleaned,
-      action: null
+      action: { type: "NONE" }
     }
   }
 }
 
-// Timeout protection
-async function withTimeout<T>(promise: Promise<T>, ms = 12_000): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, ms = 15_000): Promise<T> {
   return await Promise.race([
     promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), ms)
-    )
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("Timeout")), ms))
   ])
-}
-
-// Retry once only
-async function openaiWithRetry(fn: () => Promise<any>) {
-  try {
-    return await withTimeout(fn())
-  } catch {
-    console.warn("Retrying OpenAI once...")
-    return await withTimeout(fn(), 10_000)
-  }
-}
-
-// Language detection (CN / MS / EN only)
-function detectLanguage(text: string): "zh" | "ms" | "en" {
-  if (/[\\u4e00-\\u9fff]/.test(text)) return "zh"
-  if (/\\b(apa|boleh|tolong|nak|berapa|harga|saya|kami|rumah|condo)\\b/i.test(text))
-    return "ms"
-  return "en"
-}
-
-/* ───────────────────────────── */
-/* SYSTEM PROMPT */
-/* ───────────────────────────── */
-function buildSystemPrompt(
-  baseInstruction: string,
-  context: string,
-  now: string
-) {
-  return [
-    baseInstruction,
-    "",
-    "IMPORTANT:",
-    "You MUST respond in VALID JSON only.",
-    "If JSON is invalid, your response will be rejected.",
-    "",
-    "Current time:",
-    now,
-    "",
-    "You are a professional Senior Real Estate Consultant.",
-    "Tone: warm, confident, human.",
-    "Never say you are an AI.",
-    "",
-    "Use retrieved inventory below if available.",
-    "",
-    "RETRIEVED INVENTORY:",
-    context || "No inventory found.",
-    "",
-    "JSON FORMAT:",
-    JSON.stringify(RESPONSE_FORMAT_JSON)
-  ].join("\\n")
 }
 
 /* ───────────────────────────── */
 /* SERVER */
 /* ───────────────────────────── */
 serve(async (req) => {
-  // CORS
   if (req.method === "OPTIONS") {
     return new Response("ok", {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS"
-      }
+      headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" }
     })
   }
 
@@ -209,9 +136,7 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
     const openai = new OpenAI({ apiKey: openAiKey })
 
-    /* ───────────────────────────── */
-    /* MERCHANT PROFILE */
-/* ───────────────────────────── */
+    /* 1. GET MERCHANT PROFILE */
     const { data: profile } = await supabase
       .from("profiles")
       .select("id")
@@ -220,71 +145,75 @@ serve(async (req) => {
 
     if (!profile) return new Response("Profile not found", { status: 404 })
 
+    /* 2. GET SETTINGS & SCHEDULE */
     const { data: settings } = await supabase
       .from("user_settings")
       .select("system_instruction, model")
       .eq("user_id", profile.id)
       .single()
 
-    const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o"])
-    const modelToUse = ALLOWED_MODELS.has(settings?.model)
-      ? settings.model
-      : "gpt-4o-mini"
+    // Fetch busy slots (Future appointments)
+    const now = new Date()
+    const { data: busySlots } = await supabase
+      .from("leads")
+      .select("next_appointment")
+      .eq("user_id", profile.id)
+      .gt("next_appointment", now.toISOString())
+      .order("next_appointment", { ascending: true })
+      .limit(10)
 
-    /* ───────────────────────────── */
-    /* LANGUAGE */
-/* ───────────────────────────── */
-    const detectedLang = detectLanguage(incomingMsg)
-    const languageInstruction = {
-      en: "Reply in English.",
-      ms: "Balas dalam Bahasa Malaysia.",
-      zh: "请用中文回复。"
-    }[detectedLang]
+    const scheduleContext = busySlots?.map((s: any) => 
+      "- " + new Date(s.next_appointment).toLocaleString("en-US", { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + " (Busy)"
+    ).join("\\n") || "No upcoming appointments."
 
-    /* ───────────────────────────── */
-    /* RAG */
-/* ───────────────────────────── */
-    let context = ""
+    /* 3. RAG RETRIEVAL */
+    let knowledgeContext = ""
     try {
       const embeddingResp = await openai.embeddings.create({
         model: "text-embedding-3-small",
-        input: incomingMsg,
-        dimensions: 768
+        input: incomingMsg
       })
-
       const { data: chunks } = await supabase.rpc("match_knowledge", {
         query_embedding: embeddingResp.data[0].embedding,
         match_threshold: 0.5,
         match_count: 3
       })
+      if (chunks?.length) knowledgeContext = chunks.map((c: any) => c.content).join("\\n\\n")
+    } catch (e) { console.error("RAG Error", e) }
 
-      if (chunks?.length) {
-        context = chunks.map((c: any) => c.content).join("\\n\\n")
-      }
-    } catch (e) {
-      console.error("RAG error", e)
-    }
+    /* 4. BUILD PROMPT */
+    const systemPrompt = \`
+\${settings?.system_instruction || "You are a helpful real estate assistant."}
 
-    /* ───────────────────────────── */
-    /* CHAT HISTORY */
-/* ───────────────────────────── */
+CONTEXT:
+Today is \${now.toLocaleString()}.
+\${knowledgeContext ? "Use this knowledge: " + knowledgeContext : ""}
+
+AVAILABILITY (You MUST check this):
+\${scheduleContext}
+
+INSTRUCTIONS:
+1. If the user asks for property recommendations, provide them based on knowledge.
+2. If the user wants to book a viewing, CHECK the Availability above.
+   - If slot is busy, decline politely.
+   - If slot is free, confirm the booking in your reply.
+3. Respond in VALID JSON format.
+
+JSON STRUCTURE:
+\${JSON.stringify(RESPONSE_FORMAT_JSON)}
+\`
+
+    /* 5. FETCH HISTORY */
     const { data: history } = await supabase
       .from("messages")
       .select("text, sender")
       .eq("user_id", profile.id)
       .eq("phone", senderPhone)
       .order("created_at", { ascending: false })
-      .limit(10)
+      .limit(8)
 
     const messages = [
-      {
-        role: "system",
-        content: buildSystemPrompt(
-          \`\${settings?.system_instruction || ""}\\n\${languageInstruction}\`,
-          context,
-          new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-        )
-      },
+      { role: "system", content: systemPrompt },
       ...(history || []).reverse().map((m: any) => ({
         role: m.sender === "user" ? "user" : "assistant",
         content: m.text
@@ -292,114 +221,73 @@ serve(async (req) => {
       { role: "user", content: incomingMsg }
     ]
 
-    /* ───────────────────────────── */
-    /* OPENAI */
-/* ───────────────────────────── */
-    const completion = await openaiWithRetry(() =>
-      openai.chat.completions.create({
-        model: modelToUse,
-        messages,
-        temperature: 0.3,
-        response_format: { type: "json_object" }
-      })
-    )
+    /* 6. CALL AI */
+    const completion = await withTimeout(openai.chat.completions.create({
+      model: settings?.model || "gpt-4o-mini",
+      messages: messages as any,
+      temperature: 0.3,
+      response_format: { type: "json_object" }
+    }))
 
-    const rawContent =
-      completion.choices?.[0]?.message?.content || ""
+    const rawContent = completion.choices[0].message.content || ""
+    const aiResponse = safeParseAIJson(rawContent)
+    let finalReply = aiResponse.reply
 
-    const aiContent = safeParseAIJson(rawContent)
-
-    /* ───────────────────────────── */
-    /* CRM UPDATES (LEADS) */
-    /* ───────────────────────────── */
-    try {
-        const action = aiContent.action;
-        if (action && action.type !== 'NONE') {
-            // Find existing lead
-            const { data: lead } = await supabase
-                .from('leads')
-                .select('id, tags, status')
-                .eq('user_id', profile.id)
-                .eq('phone', senderPhone)
-                .maybeSingle();
-
-            if (lead) {
-                const updates: any = {};
-                
-                // 1. Handle Booking / Schedule / Request
-                if (['SCHEDULE_VIEWING', 'REQUEST_VIEWING', 'RESCHEDULE_APPOINTMENT'].includes(action.type)) {
-                    updates.status = 'Proposal';
-                    updates.ai_analysis = \`Booking Action: \${action.reason}\`;
-                    if (action.parameters?.appointmentDate) {
-                        updates.next_appointment = action.parameters.appointmentDate;
-                    }
-                }
-
-                // 2. Handle Cancellation
-                if (action.type === 'CANCEL_APPOINTMENT') {
-                    updates.status = 'Qualified';
-                    updates.next_appointment = null;
-                    updates.ai_analysis = \`Cancelled: \${action.reason}\`;
-                }
-
-                // 3. Handle Property Interest (Tags)
-                if (action.parameters?.propertyInterest) {
-                    const newTag = action.parameters.propertyInterest;
-                    const currentTags = lead.tags || [];
-                    // Simple check to avoid duplicates
-                    if (!currentTags.some((t: string) => t.toLowerCase() === newTag.toLowerCase())) {
-                        updates.tags = [...currentTags, newTag];
-                        updates.ai_analysis = (updates.ai_analysis || '') + \` | Interested in: \${newTag}\`;
-                    }
-                }
-
-                // 4. Update Lead if needed
-                if (Object.keys(updates).length > 0) {
-                    await supabase
-                        .from('leads')
-                        .update(updates)
-                        .eq('id', lead.id);
-                }
-            } else {
-               // Optional: If lead doesn't exist yet (handled by trigger usually), 
-               // we could create it here, but trigger is safer.
-            }
-        }
-    } catch (crmErr) {
-        console.error("CRM Update Error:", crmErr);
+    /* 7. HANDLE ACTIONS (DB UPDATES) */
+    const action = aiResponse.action
+    
+    // CRM: Create Lead if not exists
+    let { data: lead } = await supabase.from('leads').select('id, tags').eq('user_id', profile.id).eq('phone', senderPhone).maybeSingle()
+    if (!lead) {
+       const { data: newLead } = await supabase.from('leads').insert({
+           user_id: profile.id, phone: senderPhone, name: "Lead " + senderPhone, status: 'New'
+       }).select().single()
+       lead = newLead
     }
 
-    /* ───────────────────────────── */
-    /* LOG MESSAGES */
-/* ───────────────────────────── */
+    // CRM: Booking Logic
+    if (action?.type === 'SCHEDULE_VIEWING' && action.parameters?.appointmentDate) {
+        const apptDate = new Date(action.parameters.appointmentDate)
+        
+        // Final Double Check (Concurrency)
+        const { data: conflict } = await supabase.from('leads')
+            .select('id')
+            .eq('user_id', profile.id)
+            .neq('id', lead.id) // ignore self
+            .gte('next_appointment', apptDate.toISOString())
+            .lt('next_appointment', new Date(apptDate.getTime() + 60*60*1000).toISOString()) // 1hr slot
+            .maybeSingle()
+
+        if (conflict) {
+            finalReply = "I apologize, but that slot was just taken. Could we try another time?"
+        } else {
+            await supabase.from('leads').update({
+                next_appointment: apptDate.toISOString(),
+                status: 'Proposal',
+                ai_analysis: 'Booking Confirmed via WhatsApp'
+            }).eq('id', lead.id)
+        }
+    }
+
+    // CRM: Interest Tagging
+    if (action?.parameters?.propertyInterest && lead) {
+        const currentTags = lead.tags || []
+        if (!currentTags.includes(action.parameters.propertyInterest)) {
+            await supabase.from('leads').update({
+                tags: [...currentTags, action.parameters.propertyInterest]
+            }).eq('id', lead.id)
+        }
+    }
+
+    /* 8. SAVE LOGS */
     await supabase.from("messages").insert([
-      {
-        user_id: profile.id,
-        phone: senderPhone,
-        sender: "user",
-        direction: "inbound",
-        text: incomingMsg,
-        intent_tag: aiContent.intent
-      },
-      {
-        user_id: profile.id,
-        phone: senderPhone,
-        sender: "bot",
-        direction: "outbound",
-        text: aiContent.reply
-      }
+      { user_id: profile.id, phone: senderPhone, sender: "user", direction: "inbound", text: incomingMsg, intent_tag: aiResponse.intent },
+      { user_id: profile.id, phone: senderPhone, sender: "bot", direction: "outbound", text: finalReply }
     ])
 
-    /* ───────────────────────────── */
-    /* TWILIO RESPONSE */
-/* ───────────────────────────── */
+    /* 9. RETURN TWIML */
     return new Response(
-      \`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Message>
-    <Body>\${aiContent.reply}</Body>
-  </Message>
-</Response>\`,
+      \`<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>\${finalReply}</Body></Message></Response>\`,
       { headers: { "Content-Type": "text/xml; charset=utf-8" } }
     )
 

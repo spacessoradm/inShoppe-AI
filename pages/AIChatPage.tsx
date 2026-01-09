@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -753,17 +752,18 @@ const AIChatPage: React.FC = () => {
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
+            showNotification('info', `Reading ${file.name}...`);
             
             if (file.type === 'application/pdf') {
                 try {
                     addLog("System: Reading PDF file...");
                     
-                    // Set worker source if not already set
+                    // Set worker source if not already set.
+                    // Important: Use the version that matches the 'pdfjs-dist' import in the import map (4.0.379)
                     // @ts-ignore
                     if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
                          // @ts-ignore
-                         // Use esm.sh for the worker to match the detected library version (5.4.449)
-                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.4.449/build/pdf.worker.mjs';
+                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
                     }
                     
                     const arrayBuffer = await file.arrayBuffer();
@@ -773,7 +773,7 @@ const AIChatPage: React.FC = () => {
                     // @ts-ignore
                     const loadingTask = pdfjsLib.getDocument({
                         data,
-                        cMapUrl: 'https://esm.sh/pdfjs-dist@5.4.449/cmaps/',
+                        cMapUrl: 'https://aistudiocdn.com/pdfjs-dist@4.0.379/cmaps/',
                         cMapPacked: true,
                     });
                     
@@ -792,13 +792,16 @@ const AIChatPage: React.FC = () => {
                     
                     if (!fullText.trim()) {
                         addLog("Warning: PDF extracted but no text found. It might be an image-only PDF.");
+                        showNotification('error', "No text found in PDF. Is it a scanned image?");
                     } else {
                          setKnowledgeInput(fullText);
                          addLog(`System: PDF extraction complete.`);
+                         showNotification('success', "PDF text extracted. Click 'Save to Knowledge Base'.");
                     }
                 } catch (err: any) {
                     console.error("PDF Parse Error:", err);
                     addLog(`Error: Failed to parse PDF file. ${err.message || err}`);
+                    showNotification('error', "Failed to read PDF.");
                     if (err.message && err.message.includes('version')) {
                          addLog("Hint: PDF Worker version mismatch. Please refresh to reset.");
                     }
@@ -811,8 +814,12 @@ const AIChatPage: React.FC = () => {
                     if (typeof text === 'string') {
                         setKnowledgeInput(text);
                         addLog("System: Text file loaded.");
+                        showNotification('success', "File loaded. Click 'Save to Knowledge Base'.");
                     }
                 };
+                reader.onerror = () => {
+                    showNotification('error', "Failed to read text file.");
+                }
                 reader.readAsText(file);
             }
         }
