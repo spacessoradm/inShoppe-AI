@@ -759,11 +759,11 @@ const AIChatPage: React.FC = () => {
                     addLog("System: Reading PDF file...");
                     
                     // Set worker source if not already set.
-                    // Important: Use the version that matches the 'pdfjs-dist' import in the import map (4.0.379)
+                    // Important: The browser loaded API version 5.4.530 (as per user logs), so we must force worker to match.
                     // @ts-ignore
                     if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
                          // @ts-ignore
-                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs';
                     }
                     
                     const arrayBuffer = await file.arrayBuffer();
@@ -773,7 +773,7 @@ const AIChatPage: React.FC = () => {
                     // @ts-ignore
                     const loadingTask = pdfjsLib.getDocument({
                         data,
-                        cMapUrl: 'https://aistudiocdn.com/pdfjs-dist@4.0.379/cmaps/',
+                        cMapUrl: 'https://esm.sh/pdfjs-dist@5.4.530/cmaps/',
                         cMapPacked: true,
                     });
                     
