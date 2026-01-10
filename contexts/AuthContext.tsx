@@ -22,6 +22,7 @@ interface AuthContextType {
   upgradePlan: (plan: Plan, creditsToAdd: number) => Promise<void>;
   deductCredit: () => Promise<boolean>; 
   updateUserSettings: (newSettings: Partial<UserSettings>) => Promise<void>; // Added Update Method
+  refreshProfile: () => Promise<void>;
   isWhatsAppConnected: boolean;
   connectWhatsApp: () => void;
   isDemoMode: boolean;
@@ -234,6 +235,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const refreshProfile = async () => {
+      if (user) {
+          await loadProfileAndOrg(user.id, user.email);
+      }
+  };
+
   const updateUserSettings = async (newSettings: Partial<UserSettings>) => {
       if (!user) return;
 
@@ -333,7 +340,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email: email,
         organization_id: 'org_demo_123',
         role: 'owner',
-        full_name: email.split('@')[0]
+        full_name: email.split('@')[0],
+        bio: 'Demo User'
     };
     const mockOrg: Organization = {
         id: 'org_demo_123',
@@ -454,6 +462,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     upgradePlan,
     deductCredit,
     updateUserSettings,
+    refreshProfile,
     isWhatsAppConnected,
     connectWhatsApp,
     isDemoMode: !isSupabaseConfigured

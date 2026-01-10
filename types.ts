@@ -43,6 +43,11 @@ export interface UserProfile {
   organization_id: string; // Link to the organization
   role: 'owner' | 'member' | 'admin';
   twilio_phone_number?: string; // Persisted Twilio Number
+  // Personal Info
+  bio?: string;
+  phone?: string; // Personal contact phone
+  country?: string;
+  city?: string;
 }
 
 export interface UserSettings {

@@ -45,9 +45,8 @@ interface KnowledgeItem {
 }
 
 const SettingsPage: React.FC = () => {
-    const { user, profile, organization, settings } = useAuth();
+    const { user, profile, organization, settings, refreshProfile } = useAuth();
     const navigate = useNavigate();
-    const [name, setName] = useState(profile?.full_name || 'User');
     const [inviteEmail, setInviteEmail] = useState('');
     
     const stripeKey = getStripeKey();
@@ -63,6 +62,17 @@ const SettingsPage: React.FC = () => {
     const [editingTemplate, setEditingTemplate] = useState<any>(null);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [savingTemplate, setSavingTemplate] = useState(false);
+
+    // Profile Edit State
+    const [isProfileEditOpen, setIsProfileEditOpen] = useState(false);
+    const [profileForm, setProfileForm] = useState({
+        full_name: '',
+        phone: '',
+        bio: '',
+        country: '',
+        city: ''
+    });
+    const [savingProfile, setSavingProfile] = useState(false);
 
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -101,6 +111,43 @@ const SettingsPage: React.FC = () => {
             ]);
         }
     }, [organization]);
+
+    // Initialize Profile Form
+    useEffect(() => {
+        if (profile) {
+            setProfileForm({
+                full_name: profile.full_name || '',
+                phone: profile.phone || '', // Personal contact
+                bio: profile.bio || '',
+                country: profile.country || '',
+                city: profile.city || ''
+            });
+        }
+    }, [profile]);
+
+    const handleProfileUpdate = async () => {
+        setSavingProfile(true);
+        try {
+            if (supabase && user) {
+                const { error } = await supabase.from('profiles').update({
+                    full_name: profileForm.full_name,
+                    phone: profileForm.phone,
+                    bio: profileForm.bio,
+                    country: profileForm.country,
+                    city: profileForm.city
+                }).eq('id', user.id);
+                
+                if (error) throw error;
+                await refreshProfile();
+                setIsProfileEditOpen(false);
+            }
+        } catch (e: any) {
+            console.error("Profile update failed", e);
+            alert("Failed to update profile: " + e.message);
+        } finally {
+            setSavingProfile(false);
+        }
+    };
 
     const fetchTemplates = async () => {
         if (!organization || !supabase) return;
@@ -453,10 +500,12 @@ const SettingsPage: React.FC = () => {
                                         <div className="text-center sm:text-left">
                                             <h3 className="text-xl font-bold text-slate-900">{profile?.full_name || 'User Name'}</h3>
                                             <p className="text-slate-500 text-sm mb-1">{profile?.role ? profile.role.toUpperCase() : 'MEMBER'}</p>
-                                            <p className="text-slate-400 text-xs">Leeds, United Kingdom</p>
+                                            <p className="text-slate-400 text-xs">
+                                                {profile?.city && profile?.country ? `${profile.city}, ${profile.country}` : 'Location not set'}
+                                            </p>
                                         </div>
                                         <div className="sm:ml-auto">
-                                            <Button variant="outline" size="sm" className="rounded-full border-slate-200">
+                                            <Button variant="outline" size="sm" className="rounded-full border-slate-200" onClick={() => setIsProfileEditOpen(true)}>
                                                 Edit <EditIcon className="w-3 h-3 ml-2" />
                                             </Button>
                                         </div>
@@ -467,14 +516,14 @@ const SettingsPage: React.FC = () => {
                                 <div className="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 mb-6 shadow-sm">
                                     <div className="flex justify-between items-center mb-6">
                                         <h3 className="font-bold text-slate-900">Personal Information</h3>
-                                        <Button variant="outline" size="sm" className="rounded-full border-slate-200">
+                                        <Button variant="outline" size="sm" className="rounded-full border-slate-200" onClick={() => setIsProfileEditOpen(true)}>
                                             Edit <EditIcon className="w-3 h-3 ml-2" />
                                         </Button>
                                     </div>
                                     <div className="grid md:grid-cols-2 gap-y-6 gap-x-8">
                                         <div>
                                             <label className="block text-sm text-slate-500 mb-1">Full Name</label>
-                                            <div className="font-medium text-slate-900">{name}</div>
+                                            <div className="font-medium text-slate-900">{profile?.full_name || '-'}</div>
                                         </div>
                                         <div>
                                             <label className="block text-sm text-slate-500 mb-1">Email address</label>
@@ -482,11 +531,11 @@ const SettingsPage: React.FC = () => {
                                         </div>
                                         <div>
                                             <label className="block text-sm text-slate-500 mb-1">Phone</label>
-                                            <div className="font-medium text-slate-900">{settings?.twilio_phone_number || "+09 345 346 46"}</div>
+                                            <div className="font-medium text-slate-900">{profile?.phone || '-'}</div>
                                         </div>
                                         <div>
                                             <label className="block text-sm text-slate-500 mb-1">Bio</label>
-                                            <div className="font-medium text-slate-900">Team Manager</div>
+                                            <div className="font-medium text-slate-900">{profile?.bio || '-'}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -495,18 +544,18 @@ const SettingsPage: React.FC = () => {
                                 <div className="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 shadow-sm">
                                     <div className="flex justify-between items-center mb-6">
                                         <h3 className="font-bold text-slate-900">Address</h3>
-                                        <Button variant="outline" size="sm" className="rounded-full border-slate-200">
+                                        <Button variant="outline" size="sm" className="rounded-full border-slate-200" onClick={() => setIsProfileEditOpen(true)}>
                                             Edit <EditIcon className="w-3 h-3 ml-2" />
                                         </Button>
                                     </div>
                                     <div className="grid md:grid-cols-2 gap-y-6 gap-x-8">
                                         <div>
                                             <label className="block text-sm text-slate-500 mb-1">Country</label>
-                                            <div className="font-medium text-slate-900">United Kingdom</div>
+                                            <div className="font-medium text-slate-900">{profile?.country || '-'}</div>
                                         </div>
                                         <div>
                                             <label className="block text-sm text-slate-500 mb-1">City/State</label>
-                                            <div className="font-medium text-slate-900">Leeds, East London</div>
+                                            <div className="font-medium text-slate-900">{profile?.city || '-'}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -721,6 +770,71 @@ const SettingsPage: React.FC = () => {
                                     {savingTemplate ? 'Saving...' : 'Save Changes'}
                                 </Button>
                             </div>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+
+                {/* EDIT PROFILE MODAL */}
+                <Dialog open={isProfileEditOpen} onOpenChange={setIsProfileEditOpen}>
+                    <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-[500px] rounded-3xl">
+                        <DialogHeader>
+                            <DialogTitle>Edit Profile</DialogTitle>
+                            <DialogDescription>
+                                Update your personal details.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-slate-700">Full Name</label>
+                                <Input 
+                                    value={profileForm.full_name} 
+                                    onChange={(e) => setProfileForm({...profileForm, full_name: e.target.value})}
+                                    className="bg-white border-slate-300 rounded-xl"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-slate-700">Country</label>
+                                    <Input 
+                                        value={profileForm.country} 
+                                        onChange={(e) => setProfileForm({...profileForm, country: e.target.value})}
+                                        className="bg-white border-slate-300 rounded-xl"
+                                        placeholder="e.g. Malaysia"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-slate-700">City/State</label>
+                                    <Input 
+                                        value={profileForm.city} 
+                                        onChange={(e) => setProfileForm({...profileForm, city: e.target.value})}
+                                        className="bg-white border-slate-300 rounded-xl"
+                                        placeholder="e.g. Kuala Lumpur"
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-slate-700">Personal Phone</label>
+                                <Input 
+                                    value={profileForm.phone} 
+                                    onChange={(e) => setProfileForm({...profileForm, phone: e.target.value})}
+                                    className="bg-white border-slate-300 rounded-xl"
+                                    placeholder="+60..."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-slate-700">Bio / Role</label>
+                                <Input 
+                                    value={profileForm.bio} 
+                                    onChange={(e) => setProfileForm({...profileForm, bio: e.target.value})}
+                                    className="bg-white border-slate-300 rounded-xl"
+                                />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button variant="ghost" onClick={() => setIsProfileEditOpen(false)}>Cancel</Button>
+                            <Button onClick={handleProfileUpdate} disabled={savingProfile} className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl">
+                                {savingProfile ? 'Saving...' : 'Save Changes'}
+                            </Button>
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>

@@ -31,14 +31,30 @@ create table if not exists profiles (
   organization_id uuid references organizations(id),
   role text default 'owner',
   twilio_phone_number text, -- Linked Phone Number for Inbound Routing (Legacy/Quick Access)
+  bio text,
+  phone text,
+  country text,
+  city text,
   created_at timestamptz default now()
 );
 
--- SAFETY: Add twilio_phone_number to profiles if missing
+-- SAFETY: Add columns to profiles if missing (Updates for existing tables)
 do $$
 begin
   if not exists (select 1 from information_schema.columns where table_name = 'profiles' and column_name = 'twilio_phone_number') then
     alter table profiles add column twilio_phone_number text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'profiles' and column_name = 'bio') then
+    alter table profiles add column bio text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'profiles' and column_name = 'phone') then
+    alter table profiles add column phone text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'profiles' and column_name = 'country') then
+    alter table profiles add column country text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'profiles' and column_name = 'city') then
+    alter table profiles add column city text;
   end if;
 end $$;
 
@@ -363,10 +379,6 @@ begin
     alter publication supabase_realtime add table generated_documents;
   end if;
 end $$;
-
--- 16. INIT DEFAULT TEMPLATE (Optional - For demo)
--- This part is tricky without an actual file, so we skip it for the SQL script.
--- Instead, the App will have a built-in default logic.
 `;
 
 const SupabaseSetup: React.FC = () => {

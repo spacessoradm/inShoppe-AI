@@ -226,7 +226,7 @@ const SolvingAnimation: React.FC = () => {
               drawRoundedRect(0, 0, 70, 18, 9);
               ctx.fill();
               ctx.fillStyle = '#fff';
-              ctx.font = '10px Inter, sans-serif';
+              ctx.font = '10px "Lexend", sans-serif';
               ctx.fillText(b.tag, 10, 12);
               ctx.restore();
            }
@@ -234,7 +234,7 @@ const SolvingAnimation: React.FC = () => {
              ctx.save();
              ctx.translate(x + 130, y + 16);
              ctx.fillStyle = GOLD;
-             ctx.font = 'bold 10px Inter, sans-serif';
+             ctx.font = 'bold 10px "Lexend", sans-serif';
              ctx.fillText("AI REPLYING...", 0, 0);
              ctx.restore();
            }
@@ -390,7 +390,7 @@ const ActionEngineAnimation: React.FC = () => {
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        ctx.font = isActive ? 'bold 12px Inter, sans-serif' : '12px Inter, sans-serif';
+        ctx.font = isActive ? 'bold 12px "Lexend", sans-serif' : '12px "Lexend", sans-serif';
         ctx.fillStyle = isActive ? THEME.main : '#94a3b8'; // Slate-400
         ctx.textAlign = 'left';
         ctx.fillText(action.label, endX + 15, action.y + 4);
@@ -439,7 +439,7 @@ const ActionEngineAnimation: React.FC = () => {
       ctx.shadowBlur = 0;
 
       ctx.textAlign = 'center';
-      ctx.font = '10px Inter, sans-serif';
+      ctx.font = '10px "Lexend", sans-serif';
       if (scenarioProgress < 0.3) {
           ctx.fillStyle = '#94a3b8';
           ctx.fillText("READY", brainX, centerY + 4);
@@ -448,7 +448,7 @@ const ActionEngineAnimation: React.FC = () => {
           ctx.fillText("AI...", brainX, centerY + 4);
       } else {
           ctx.fillStyle = THEME.main;
-          ctx.font = 'bold 10px Inter, sans-serif';
+          ctx.font = 'bold 10px "Lexend", sans-serif';
           ctx.fillText(currentScenario.intent, brainX, centerY + 4);
       }
 
@@ -586,7 +586,7 @@ const ProductAnimation: React.FC = () => {
                  drawRoundedRect(x + w - 70, y + 15, 60, 16, 4);
                  ctx.fill();
                  ctx.fillStyle = '#fff';
-                 ctx.font = 'bold 9px Inter';
+                 ctx.font = 'bold 9px "Lexend", sans-serif';
                  ctx.fillText(t.tag, x + w - 65, y + 26);
                  ctx.globalAlpha = 1;
              }
@@ -610,7 +610,7 @@ const ProductAnimation: React.FC = () => {
             ctx.stroke();
             
             ctx.fillStyle = BRAND;
-            ctx.font = 'bold 14px Inter';
+            ctx.font = 'bold 14px "Lexend", sans-serif';
             ctx.fillText("AI PROCESSING", panelX + 20, 90);
             
             const actions = ["Intent Analysis", "CRM Update", "Drafting Reply", "Scheduled"];
@@ -627,7 +627,7 @@ const ProductAnimation: React.FC = () => {
                         ctx.fill();
                     }
                     ctx.fillStyle = '#334155'; // Slate-700
-                    ctx.font = '12px Inter';
+                    ctx.font = '12px "Lexend", sans-serif';
                     ctx.fillText(act, panelX + 50, y + 4);
                 }
             });
@@ -721,7 +721,7 @@ const CooperationAnimation: React.FC = () => {
                   ctx.stroke();
                   
                   ctx.fillStyle = '#64748b'; // Slate-500
-                  ctx.font = '10px Inter';
+                  ctx.font = '10px "Lexend", sans-serif';
                   ctx.textAlign = 'center';
                   ctx.fillText(node.label, cx, cy + 20);
               }
@@ -812,7 +812,7 @@ const BrandAnimation: React.FC = () => {
           ctx.stroke();
 
           ctx.fillStyle = BRAND;
-          ctx.font = 'bold 10px Inter';
+          ctx.font = 'bold 10px "Lexend", sans-serif';
           ctx.textAlign = 'center';
           ctx.fillText(industry.label.toUpperCase(), centerX, phoneY + 45);
 
