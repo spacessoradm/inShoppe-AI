@@ -88,11 +88,6 @@ const SettingsPage: React.FC = () => {
         setLogs(prev => [`[${time}] ${text}`, ...prev.slice(0, 49)]);
     };
 
-    // Helper: Notification (Alert)
-    const showNotification = (msg: string) => {
-        alert(msg); // Using alert for simplicity in settings, or could use a toast
-    };
-
     // Fetch Templates & Knowledge on Mount
     useEffect(() => {
         if (organization && supabase) {
@@ -411,243 +406,281 @@ const SettingsPage: React.FC = () => {
         }
     };
 
-    const handleDownloadTemplate = async (template: any) => {
-        if (!supabase || !template.file_path) return;
-        try {
-            const { data, error } = await supabase.storage.from('documents').createSignedUrl(template.file_path, 60);
-            if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank');
-        } catch (e) {
-            alert("Could not download file.");
-        }
-    };
+    // Style helper for tabs
+    const tabTriggerClass = "justify-start w-full px-4 py-3 rounded-xl text-slate-500 font-medium hover:text-slate-900 hover:bg-white transition-all text-sm data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700 data-[state=active]:font-bold border-none shadow-none text-left";
 
     return (
-        <div className="min-h-full bg-slate-50/50">
-            <div className="max-w-5xl mx-auto py-10 px-4 sm:px-6 lg:px-8">
-                
-                {/* Page Header */}
-                <div className="mb-10 flex items-center justify-between">
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight text-slate-900">{profile?.full_name || 'User'}</h1>
-                        <p className="mt-1 text-base text-slate-500">Manage your details, workspace, and AI configurations.</p>
-                    </div>
-                    <div className="hidden sm:flex gap-3">
-                        <Button className="bg-blue-600 hover:bg-blue-500 text-white shadow-sm" onClick={() => navigate('/pricing')}>
-                            Upgrade Plan
-                        </Button>
-                    </div>
-                </div>
+        <div className="min-h-full bg-slate-50/50 p-6 md:p-10">
+            <div className="max-w-7xl mx-auto">
+                {/* Page Title */}
+                <h1 className="text-2xl md:text-3xl font-bold text-slate-900 mb-8">Account Settings</h1>
 
-                <Tabs defaultValue="profile" className="w-full">
-                    {/* Modern Horizontal Navigation */}
-                    <TabsList className="w-full justify-start h-auto p-0 bg-transparent border-b border-slate-200 rounded-none mb-8 gap-8 overflow-x-auto scrollbar-none">
-                        {['Profile', 'Billing', 'Team', 'Documents', 'Knowledge', 'Connection', 'Logs'].map(tab => (
-                            <TabsTrigger
-                                key={tab}
-                                value={tab.toLowerCase()}
-                                className="rounded-none border-b-2 border-transparent px-1 py-3 text-sm font-medium text-slate-500 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 data-[state=active]:bg-transparent hover:text-slate-800 transition-colors"
-                            >
-                                {tab === 'Knowledge' ? 'Knowledge Base' : tab === 'Connection' ? 'Status' : tab === 'Logs' ? 'System Logs' : tab}
-                            </TabsTrigger>
-                        ))}
-                    </TabsList>
-
-                    {/* --- PROFILE TAB --- */}
-                    <TabsContent value="profile" className="space-y-8 animate-in fade-in-50 duration-300">
-                        {/* Basics Section */}
-                        <div className="space-y-4">
-                            <h3 className="text-lg font-semibold text-slate-900">Basics</h3>
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100 overflow-hidden">
-                                <div className="p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                    <div>
-                                        <label className="text-sm font-semibold text-slate-900 block">Full Name</label>
-                                        <p className="text-sm text-slate-500 mt-1">Set the name used in emails and chats.</p>
-                                    </div>
-                                    <Input value={name} onChange={(e) => setName(e.target.value)} className="bg-transparent border-slate-200 w-full sm:w-64" />
-                                </div>
-                                <div className="p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                    <div>
-                                        <label className="text-sm font-semibold text-slate-900 block">Email Address</label>
-                                        <p className="text-sm text-slate-500 mt-1">Used for login and notifications.</p>
-                                    </div>
-                                    <div className="flex items-center gap-4">
-                                        <span className="text-sm text-slate-700 font-medium bg-slate-100 px-3 py-1.5 rounded-md">{user?.email}</span>
-                                        <Badge className="bg-emerald-50 text-emerald-600 border-emerald-200">Verified</Badge>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </TabsContent>
+                <Tabs defaultValue="profile" className="flex flex-col md:flex-row gap-8 lg:gap-12" orientation="vertical">
                     
-                    {/* --- BILLING TAB --- */}
-                    <TabsContent value="billing" className="space-y-8 animate-in fade-in-50 duration-300">
-                        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                                <div>
-                                    <h3 className="text-lg font-semibold text-slate-900">{organization?.name}</h3>
-                                    <p className="text-sm text-slate-500 mt-1">Subscription managed by {profile?.full_name}</p>
-                                </div>
-                                <Badge className="bg-blue-600 text-white hover:bg-blue-700 capitalize text-sm px-3 py-1">
-                                    {organization?.plan} Plan
-                                </Badge>
-                            </div>
-                            
-                            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
-                                <div className="p-8 text-center sm:text-left">
-                                    <p className="text-sm font-medium text-slate-500 mb-2 uppercase tracking-wide">Credits Available</p>
-                                    <p className="text-4xl font-bold text-slate-900 tracking-tight">{organization?.credits || 0}</p>
-                                </div>
-                                <div className="p-8 flex flex-col justify-center gap-3">
-                                    <Button onClick={() => navigate('/pricing')} className="w-full bg-slate-900 text-white hover:bg-slate-800">
-                                        Upgrade Plan
-                                    </Button>
-                                </div>
-                            </div>
-                        </div>
-                    </TabsContent>
+                    {/* --- Sidebar Navigation --- */}
+                    <aside className="w-full md:w-60 lg:w-72 shrink-0 flex flex-col gap-1">
+                        <TabsList className="flex flex-col h-auto bg-transparent space-y-1 p-0 items-stretch bg-transparent">
+                            <TabsTrigger value="profile" className={tabTriggerClass}>My Profile</TabsTrigger>
+                            <TabsTrigger value="billing" className={tabTriggerClass}>Billing</TabsTrigger>
+                            <TabsTrigger value="team" className={tabTriggerClass}>Team Member</TabsTrigger>
+                            <TabsTrigger value="documents" className={tabTriggerClass}>Documents</TabsTrigger>
+                            <TabsTrigger value="knowledge" className={tabTriggerClass}>Knowledge Base</TabsTrigger>
+                            <TabsTrigger value="connection" className={tabTriggerClass}>Connection Status</TabsTrigger>
+                            <TabsTrigger value="logs" className={tabTriggerClass}>System Logs</TabsTrigger>
+                        </TabsList>
 
-                    {/* --- TEAM TAB --- */}
-                    <TabsContent value="team" className="space-y-8 animate-in fade-in-50 duration-300">
-                        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                                <div>
-                                    <h3 className="text-lg font-semibold text-slate-900">Team Members</h3>
-                                    <p className="text-sm text-slate-500 mt-1">
-                                        {currentUsers} of {currentPlanLimit} seats used
-                                    </p>
-                                </div>
-                                <div className="flex gap-2 w-full sm:w-auto">
-                                    <Input 
-                                        placeholder="colleague@company.com" 
-                                        className="bg-white border-slate-300 flex-1 sm:w-64"
-                                        value={inviteEmail}
-                                        onChange={(e) => setInviteEmail(e.target.value)}
-                                        disabled={currentUsers >= currentPlanLimit}
-                                    />
-                                    <Button 
-                                        disabled={currentUsers >= currentPlanLimit}
-                                        className="bg-blue-600 hover:bg-blue-500 text-white"
-                                    >
-                                        Invite
-                                    </Button>
-                                </div>
-                            </div>
-                            <div className="divide-y divide-slate-100">
-                                <div className="p-4 sm:p-6 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-sm">
+                        <div className="mt-8 px-4">
+                            <button className="text-red-500 hover:text-red-600 text-sm font-medium transition-colors">
+                                Delete Account
+                            </button>
+                        </div>
+                    </aside>
+
+                    {/* --- Content Area --- */}
+                    <div className="flex-1 min-w-0">
+                        
+                        {/* PROFILE TAB */}
+                        <TabsContent value="profile" className="space-y-6 mt-0 animate-in fade-in-50 duration-300">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-900 mb-6">My Profile</h2>
+                                
+                                {/* Profile Card */}
+                                <div className="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 mb-6 shadow-sm">
+                                    <div className="flex flex-col sm:flex-row items-center gap-6">
+                                        <div className="w-24 h-24 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-3xl font-bold border-4 border-indigo-50">
                                             {profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'U'}
                                         </div>
-                                        <div>
-                                            <p className="text-sm font-semibold text-slate-900">{profile?.full_name || 'You'}</p>
-                                            <p className="text-xs text-slate-500">{user?.email}</p>
+                                        <div className="text-center sm:text-left">
+                                            <h3 className="text-xl font-bold text-slate-900">{profile?.full_name || 'User Name'}</h3>
+                                            <p className="text-slate-500 text-sm mb-1">{profile?.role ? profile.role.toUpperCase() : 'MEMBER'}</p>
+                                            <p className="text-slate-400 text-xs">Leeds, United Kingdom</p>
+                                        </div>
+                                        <div className="sm:ml-auto">
+                                            <Button variant="outline" size="sm" className="rounded-full border-slate-200">
+                                                Edit <EditIcon className="w-3 h-3 ml-2" />
+                                            </Button>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-4">
-                                        <span className="text-sm text-slate-500 capitalize">{profile?.role}</span>
-                                        <Button variant="ghost" size="sm" disabled className="text-slate-400">Owner</Button>
+                                </div>
+
+                                {/* Personal Information */}
+                                <div className="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 mb-6 shadow-sm">
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="font-bold text-slate-900">Personal Information</h3>
+                                        <Button variant="outline" size="sm" className="rounded-full border-slate-200">
+                                            Edit <EditIcon className="w-3 h-3 ml-2" />
+                                        </Button>
+                                    </div>
+                                    <div className="grid md:grid-cols-2 gap-y-6 gap-x-8">
+                                        <div>
+                                            <label className="block text-sm text-slate-500 mb-1">Full Name</label>
+                                            <div className="font-medium text-slate-900">{name}</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-slate-500 mb-1">Email address</label>
+                                            <div className="font-medium text-slate-900">{user?.email}</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-slate-500 mb-1">Phone</label>
+                                            <div className="font-medium text-slate-900">{settings?.twilio_phone_number || "+09 345 346 46"}</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-slate-500 mb-1">Bio</label>
+                                            <div className="font-medium text-slate-900">Team Manager</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Address */}
+                                <div className="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 shadow-sm">
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="font-bold text-slate-900">Address</h3>
+                                        <Button variant="outline" size="sm" className="rounded-full border-slate-200">
+                                            Edit <EditIcon className="w-3 h-3 ml-2" />
+                                        </Button>
+                                    </div>
+                                    <div className="grid md:grid-cols-2 gap-y-6 gap-x-8">
+                                        <div>
+                                            <label className="block text-sm text-slate-500 mb-1">Country</label>
+                                            <div className="font-medium text-slate-900">United Kingdom</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-slate-500 mb-1">City/State</label>
+                                            <div className="font-medium text-slate-900">Leeds, East London</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    </TabsContent>
+                        </TabsContent>
 
-                    {/* --- DOCUMENTS TAB --- */}
-                    <TabsContent value="documents" className="space-y-8 animate-in fade-in-50 duration-300">
-                        <div className="flex justify-between items-center">
-                            <h3 className="text-lg font-semibold text-slate-900">Templates</h3>
-                            
-                            <input 
-                                type="file" 
-                                ref={fileInputRef} 
-                                onChange={handleFileChange}
-                                className="hidden" 
-                                accept=".docx,.doc,.pdf,.xls,.xlsx"
-                            />
-                            
-                            <Button 
-                                onClick={handleUploadClick} 
-                                variant="outline" 
-                                className="bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
-                                disabled={uploading}
-                            >
-                                {uploading ? 'Uploading...' : "Upload Document"}
-                            </Button>
-                        </div>
+                        {/* BILLING TAB */}
+                        <TabsContent value="billing" className="mt-0 animate-in fade-in-50 duration-300">
+                            <h2 className="text-xl font-bold text-slate-900 mb-6">Billing & Plan</h2>
+                            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                                    <div>
+                                        <h3 className="text-lg font-bold text-slate-900">{organization?.name}</h3>
+                                        <p className="text-sm text-slate-500 mt-1">Subscription managed by {profile?.full_name}</p>
+                                    </div>
+                                    <Badge className="bg-blue-600 text-white hover:bg-blue-700 capitalize text-sm px-4 py-1.5 rounded-full">
+                                        {organization?.plan} Plan
+                                    </Badge>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+                                    <div className="p-8">
+                                        <p className="text-sm font-medium text-slate-500 mb-2 uppercase tracking-wide">Credits Available</p>
+                                        <p className="text-5xl font-bold text-slate-900 tracking-tight">{organization?.credits || 0}</p>
+                                    </div>
+                                    <div className="p-8 flex flex-col justify-center gap-3 bg-slate-50/20">
+                                        <Button onClick={() => navigate('/pricing')} className="w-full bg-slate-900 text-white hover:bg-slate-800 h-12 rounded-xl">
+                                            Upgrade Plan
+                                        </Button>
+                                        <p className="text-xs text-center text-slate-400">Next billing date: {new Date().toLocaleDateString()}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </TabsContent>
 
-                        {loadingTemplates ? (
-                            <div className="py-12 text-center text-slate-500">Loading templates...</div>
-                        ) : (
-                            <div className="grid gap-4">
-                                {templates.map(t => (
-                                    <div key={t.id} className="group flex items-center justify-between p-5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-blue-300 transition-all hover:shadow-md cursor-pointer">
+                        {/* TEAM TAB */}
+                        <TabsContent value="team" className="mt-0 animate-in fade-in-50 duration-300">
+                            <h2 className="text-xl font-bold text-slate-900 mb-6">Team Members</h2>
+                            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                                    <div>
+                                        <h3 className="text-lg font-bold text-slate-900">Manage Team</h3>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            {currentUsers} of {currentPlanLimit} seats used
+                                        </p>
+                                    </div>
+                                    <div className="flex gap-2 w-full sm:w-auto">
+                                        <Input 
+                                            placeholder="colleague@company.com" 
+                                            className="bg-white border-slate-300 flex-1 sm:w-64 rounded-xl"
+                                            value={inviteEmail}
+                                            onChange={(e) => setInviteEmail(e.target.value)}
+                                            disabled={currentUsers >= currentPlanLimit}
+                                        />
+                                        <Button 
+                                            disabled={currentUsers >= currentPlanLimit}
+                                            className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl"
+                                        >
+                                            Invite
+                                        </Button>
+                                    </div>
+                                </div>
+                                <div className="divide-y divide-slate-100">
+                                    <div className="p-6 flex items-center justify-between hover:bg-slate-50 transition-colors">
                                         <div className="flex items-center gap-4">
-                                            <div className={cn(
-                                                "h-12 w-12 flex items-center justify-center rounded-lg border font-bold text-lg",
-                                                t.type === 'Word' || t.type === 'SPA' ? "bg-blue-50 text-blue-600 border-blue-100" :
-                                                t.type === 'Excel' ? "bg-green-50 text-green-600 border-green-100" :
-                                                t.type === 'PDF' ? "bg-red-50 text-red-600 border-red-100" :
-                                                "bg-slate-50 text-slate-600 border-slate-100"
-                                            )}>
-                                                {t.type === 'PDF' ? 'P' : t.type === 'Excel' ? 'X' : 'W'}
+                                            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-sm border border-blue-200">
+                                                {profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'U'}
                                             </div>
                                             <div>
-                                                <p className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">{t.name}</p>
-                                                <div className="flex items-center gap-2 mt-1">
-                                                    <Badge variant="secondary" className="bg-slate-100 text-slate-500 border-slate-200 font-normal">{t.type}</Badge>
-                                                    <span className="text-xs text-slate-400">• {t.file}</span>
-                                                </div>
+                                                <p className="text-sm font-bold text-slate-900">{profile?.full_name || 'You'}</p>
+                                                <p className="text-xs text-slate-500">{user?.email}</p>
                                             </div>
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            {t.default && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">Default</Badge>}
-                                            <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-900" onClick={() => handleEditClick(t)}>Edit</Button>
+                                        <div className="flex items-center gap-4">
+                                            <span className="text-sm text-slate-500 capitalize bg-slate-100 px-3 py-1 rounded-full">{profile?.role}</span>
                                         </div>
                                     </div>
-                                ))}
+                                </div>
                             </div>
-                        )}
-                    </TabsContent>
+                        </TabsContent>
 
-                    {/* --- KNOWLEDGE BASE TAB (Migrated) --- */}
-                    <TabsContent value="knowledge" className="space-y-8 animate-in fade-in-50 duration-300">
-                        <KnowledgeBaseTab 
-                            urlInput={urlInput}
-                            setUrlInput={setUrlInput}
-                            handleScrape={handleScrape}
-                            isScraping={isScraping}
-                            fileInputRef={kbFileInputRef}
-                            handleFileUpload={handleKBFileUpload}
-                            knowledgeInput={knowledgeInput}
-                            setKnowledgeInput={setKnowledgeInput}
-                            addKnowledge={addKnowledge}
-                            isEmbedding={isEmbedding}
-                            knowledgeItems={knowledgeItems}
-                        />
-                    </TabsContent>
+                        {/* DOCUMENTS TAB */}
+                        <TabsContent value="documents" className="mt-0 animate-in fade-in-50 duration-300">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-xl font-bold text-slate-900">Document Templates</h2>
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef} 
+                                    onChange={handleFileChange}
+                                    className="hidden" 
+                                    accept=".docx,.doc,.pdf,.xls,.xlsx"
+                                />
+                                <Button 
+                                    onClick={handleUploadClick} 
+                                    className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl"
+                                    disabled={uploading}
+                                >
+                                    {uploading ? 'Uploading...' : "Upload Template"}
+                                </Button>
+                            </div>
 
-                    {/* --- CONNECTION STATUS TAB (Migrated) --- */}
-                    <TabsContent value="connection" className="space-y-8 animate-in fade-in-50 duration-300">
-                        <ConnectionStatusTab 
-                            webhookUrl={settings?.webhook_url || ''}
-                            checkWebhookReachability={checkWebhookReachability}
-                            webhookStatus={webhookStatus}
-                        />
-                    </TabsContent>
+                            {loadingTemplates ? (
+                                <div className="py-12 text-center text-slate-500 bg-white rounded-3xl border border-slate-200">Loading templates...</div>
+                            ) : (
+                                <div className="grid gap-4">
+                                    {templates.map(t => (
+                                        <div key={t.id} className="group flex items-center justify-between p-5 rounded-3xl bg-white border border-slate-200 shadow-sm hover:border-blue-300 transition-all hover:shadow-md cursor-pointer">
+                                            <div className="flex items-center gap-4">
+                                                <div className={cn(
+                                                    "h-12 w-12 flex items-center justify-center rounded-2xl font-bold text-lg",
+                                                    t.type === 'Word' || t.type === 'SPA' ? "bg-blue-50 text-blue-600" :
+                                                    t.type === 'Excel' ? "bg-green-50 text-green-600" :
+                                                    t.type === 'PDF' ? "bg-red-50 text-red-600" :
+                                                    "bg-slate-50 text-slate-600"
+                                                )}>
+                                                    {t.type === 'PDF' ? 'P' : t.type === 'Excel' ? 'X' : 'W'}
+                                                </div>
+                                                <div>
+                                                    <p className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{t.name}</p>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <Badge variant="secondary" className="bg-slate-100 text-slate-500 border-none font-normal">{t.type}</Badge>
+                                                        <span className="text-xs text-slate-400">• {t.file}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                {t.default && <Badge className="bg-green-100 text-green-700 border-none hover:bg-green-100">Default</Badge>}
+                                                <Button variant="ghost" size="sm" className="text-slate-400 hover:text-slate-900" onClick={() => handleEditClick(t)}>Edit</Button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </TabsContent>
 
-                    {/* --- SYSTEM LOGS TAB (Migrated) --- */}
-                    <TabsContent value="logs" className="space-y-8 animate-in fade-in-50 duration-300 h-[500px]">
-                        <SystemLogsTab 
-                            logs={logs}
-                            messagesEndRef={messagesEndRef}
-                        />
-                    </TabsContent>
+                        {/* KNOWLEDGE TAB */}
+                        <TabsContent value="knowledge" className="mt-0 animate-in fade-in-50 duration-300 h-[calc(100vh-150px)]">
+                            <KnowledgeBaseTab 
+                                urlInput={urlInput}
+                                setUrlInput={setUrlInput}
+                                handleScrape={handleScrape}
+                                isScraping={isScraping}
+                                fileInputRef={kbFileInputRef}
+                                handleFileUpload={handleKBFileUpload}
+                                knowledgeInput={knowledgeInput}
+                                setKnowledgeInput={setKnowledgeInput}
+                                addKnowledge={addKnowledge}
+                                isEmbedding={isEmbedding}
+                                knowledgeItems={knowledgeItems}
+                            />
+                        </TabsContent>
 
+                        {/* CONNECTION TAB */}
+                        <TabsContent value="connection" className="mt-0 animate-in fade-in-50 duration-300 h-[calc(100vh-150px)]">
+                            <ConnectionStatusTab 
+                                webhookUrl={settings?.webhook_url || ''}
+                                checkWebhookReachability={checkWebhookReachability}
+                                webhookStatus={webhookStatus}
+                            />
+                        </TabsContent>
+
+                        {/* LOGS TAB */}
+                        <TabsContent value="logs" className="mt-0 animate-in fade-in-50 duration-300 h-[600px] rounded-3xl overflow-hidden border border-slate-200">
+                            <SystemLogsTab 
+                                logs={logs}
+                                messagesEndRef={messagesEndRef}
+                            />
+                        </TabsContent>
+
+                    </div>
                 </Tabs>
 
                 {/* EDIT TEMPLATE MODAL */}
                 <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-                    <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-[425px]">
+                    <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-[425px] rounded-3xl">
                         <DialogHeader>
                             <DialogTitle>Edit Template</DialogTitle>
                             <DialogDescription>
@@ -662,10 +695,10 @@ const SettingsPage: React.FC = () => {
                                         id="t-name" 
                                         value={editingTemplate.name} 
                                         onChange={(e) => setEditingTemplate({...editingTemplate, name: e.target.value})}
-                                        className="bg-white border-slate-300"
+                                        className="bg-white border-slate-300 rounded-xl"
                                     />
                                 </div>
-                                <div className="flex items-center justify-between space-x-2 border border-slate-200 rounded-lg p-3">
+                                <div className="flex items-center justify-between space-x-2 border border-slate-200 rounded-xl p-3 bg-slate-50">
                                     <label htmlFor="t-default" className="text-sm font-medium text-slate-700 flex-1 cursor-pointer">
                                         Set as Default
                                         <p className="text-xs text-slate-500 font-normal">Use this template automatically for its type.</p>
@@ -679,12 +712,12 @@ const SettingsPage: React.FC = () => {
                             </div>
                         )}
                         <DialogFooter className="flex gap-2 sm:justify-between">
-                            <Button variant="destructive" onClick={handleDeleteTemplate} disabled={savingTemplate} className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:text-red-700 hover:border-red-300 shadow-none">
+                            <Button variant="destructive" onClick={handleDeleteTemplate} disabled={savingTemplate} className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:text-red-700 hover:border-red-300 shadow-none rounded-xl">
                                 Delete
                             </Button>
                             <div className="flex gap-2">
                                 <Button variant="ghost" onClick={() => setIsEditModalOpen(false)}>Cancel</Button>
-                                <Button onClick={handleSaveTemplate} disabled={savingTemplate} className="bg-blue-600 hover:bg-blue-500 text-white">
+                                <Button onClick={handleSaveTemplate} disabled={savingTemplate} className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl">
                                     {savingTemplate ? 'Saving...' : 'Save Changes'}
                                 </Button>
                             </div>
@@ -695,6 +728,10 @@ const SettingsPage: React.FC = () => {
             </div>
         </div>
     );
+};
+
+function EditIcon(props: React.SVGProps<SVGSVGElement>) {
+    return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
 }
 
 export default SettingsPage;

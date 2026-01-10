@@ -8,12 +8,22 @@ interface TabsContextType {
 
 const TabsContext = createContext<TabsContextType | undefined>(undefined);
 
-const Tabs = ({ children, defaultValue, className, ...props }: { children: React.ReactNode, defaultValue: string } & React.HTMLAttributes<HTMLDivElement>) => {
+interface TabsProps extends React.HTMLAttributes<HTMLDivElement> {
+    children: React.ReactNode;
+    defaultValue: string;
+    orientation?: 'horizontal' | 'vertical';
+}
+
+const Tabs = ({ children, defaultValue, className, orientation, ...props }: TabsProps) => {
     const [activeTab, setActiveTab] = useState(defaultValue);
 
     return (
         <TabsContext.Provider value={{ activeTab, setActiveTab }}>
-            <div className={cn("w-full", className)} {...props}>
+            <div 
+                className={cn("w-full", className)} 
+                data-orientation={orientation}
+                {...props}
+            >
                 {children}
             </div>
         </TabsContext.Provider>
