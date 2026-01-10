@@ -26,7 +26,7 @@ interface SimMessage {
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
 const AIChatPage: React.FC = () => {
-    const { user, organization, deductCredit, settings } = useAuth();
+    const { user, organization, deductCredit, settings, loading } = useAuth();
     const navigate = useNavigate();
 
     // --- View State ---
@@ -87,16 +87,20 @@ const AIChatPage: React.FC = () => {
 
     // --- SYNC SETTINGS FROM CONTEXT ---
     useEffect(() => {
+        // We use the settings directly from AuthContext. No new DB call needed.
         if (settings) {
             setMyPhoneNumber(settings.twilio_phone_number || '');
             if (settings.webhook_url) setWebhookUrl(settings.webhook_url);
 
-            // Determine Mode
+            // Auto-enter if credentials exist
             if (settings.twilio_account_sid && settings.twilio_auth_token && mode === 'landing') {
                 setMode('dashboard');
             }
+        } else if (!loading && !user && mode === 'landing') {
+            // Demo mode fallback (no user)
+            setMode('dashboard');
         }
-    }, [settings, mode]); 
+    }, [settings, mode, user, loading]); 
 
     // Fetch CRM Names to display in Chat
     useEffect(() => {
@@ -366,13 +370,21 @@ const AIChatPage: React.FC = () => {
                             Connect your Twilio account to enable the AI Action Engine. 
                         </p>
                     </div>
-                    <div className="pt-4 flex flex-col gap-4 items-center">
+                    <div className="pt-4 flex flex-col gap-4 items-center w-full">
                         <Button 
                             size="lg" 
                             className="bg-blue-600 hover:bg-blue-500 text-white px-10 h-12 text-base shadow-lg shadow-blue-500/40 w-full sm:w-auto" 
                             onClick={() => navigate('/console/settings')}
                         >
                             Configure in Settings
+                        </Button>
+                        <Button 
+                            variant="ghost" 
+                            size="sm"
+                            className="text-slate-400 hover:text-slate-600 hover:bg-transparent" 
+                            onClick={() => setMode('dashboard')}
+                        >
+                            Or try Simulator without API Keys →
                         </Button>
                     </div>
                 </div>

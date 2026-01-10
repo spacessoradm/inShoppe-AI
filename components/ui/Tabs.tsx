@@ -12,6 +12,7 @@ interface TabsProps extends React.HTMLAttributes<HTMLDivElement> {
     children: React.ReactNode;
     defaultValue: string;
     orientation?: 'horizontal' | 'vertical';
+    className?: string;
 }
 
 const Tabs = ({ children, defaultValue, className, orientation, ...props }: TabsProps) => {
