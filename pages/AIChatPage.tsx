@@ -1,21 +1,14 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../components/ui/Card';
-import { Input } from '../components/ui/Input';
-import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
+import { Button } from '../components/ui/Button';
 import { cn } from '../lib/utils';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
 
 // Modular Tab Components
 import { SimulatorTab } from '../components/ai-chat/SimulatorTab';
-import { KnowledgeBaseTab } from '../components/ai-chat/KnowledgeBaseTab';
-import { ConnectionStatusTab } from '../components/ai-chat/ConnectionStatusTab';
-import { SystemLogsTab } from '../components/ai-chat/SystemLogsTab';
 
 // Types
 interface SimMessage {
@@ -30,26 +23,10 @@ interface SimMessage {
   intent_tag?: string;
 }
 
-interface KnowledgeItem {
-    id: number;
-    content: string;
-    similarity?: number;
-}
-
 type ViewMode = 'landing' | 'setup' | 'dashboard';
 
-const getEnv = (key: string) => {
-    let val = '';
-    try {
-        if ((import.meta as any).env && (import.meta as any).env[key]) {
-            val = (import.meta as any).env[key];
-        }
-    } catch (e) {}
-    return val;
-};
-
 const AIChatPage: React.FC = () => {
-    const { user, profile, organization, deductCredit, settings, updateUserSettings } = useAuth();
+    const { user, organization, deductCredit, settings } = useAuth();
     const navigate = useNavigate();
 
     // --- View State ---
@@ -60,30 +37,8 @@ const AIChatPage: React.FC = () => {
     const [notification, setNotification] = useState<{type: 'success'|'error'|'info', message: string} | null>(null);
     
     // --- State: Configuration ---
-    const [loading, setLoading] = useState(false);
-    
-    // --- State: Credentials (Synced from AuthContext) ---
-    const [accountSid, setAccountSid] = useState('');
-    const [authToken, setAuthToken] = useState('');
     const [myPhoneNumber, setMyPhoneNumber] = useState('');
-    const [webhookUrl, setWebhookUrl] = useState('https://rwlecxyfukzberxcpqnr.supabase.co/functions/v1/dynamic-endpoint');
-    const [apiKey, setApiKey] = useState('');
-    
-    // --- State: Webhook ---
-    const [webhookStatus, setWebhookStatus] = useState<'idle' | 'checking' | 'success' | 'error'>('idle');
-    
-    // --- State: AI ---
-    const [systemInstruction, setSystemInstruction] = useState(
-        "You are a Senior Real Estate Sales Agent at inShoppe. Your primary objective is to QUALIFY leads, ADVANCE them to the next sales step, and SECURE VIEWING BOOKINGS or human handover. Be confident, professional, and helpful."
-    );
-    const systemInstructionRef = useRef(systemInstruction);
-
-    // --- State: Knowledge Base ---
-    const [knowledgeInput, setKnowledgeInput] = useState('');
-    const [urlInput, setUrlInput] = useState('');
-    const [isEmbedding, setIsEmbedding] = useState(false);
-    const [isScraping, setIsScraping] = useState(false);
-    const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+    const [webhookUrl, setWebhookUrl] = useState('');
     
     // --- State: Data ---
     const [messages, setMessages] = useState<SimMessage[]>([]);
@@ -92,18 +47,13 @@ const AIChatPage: React.FC = () => {
     // CRM Data Mapping
     const [phoneToNameMap, setPhoneToNameMap] = useState<Record<string, string>>({});
 
-    const [logs, setLogs] = useState<string[]>([]);
     const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
     const [input, setInput] = useState('');
     
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-
     // Keep ref updated with latest state
     useEffect(() => {
         messagesRef.current = messages;
-        systemInstructionRef.current = systemInstruction;
-    }, [messages, systemInstruction]);
+    }, [messages]);
 
     // --- Derived State: Group Messages by Phone ---
     const chats = useMemo(() => {
@@ -126,8 +76,8 @@ const AIChatPage: React.FC = () => {
 
     // --- Helpers ---
     const addLog = (text: string) => {
-        const time = new Date().toLocaleTimeString();
-        setLogs(prev => [`[${time}] ${text}`, ...prev.slice(0, 49)]);
+        // Log to console instead of UI since Logs tab moved to settings
+        console.log(`[System]: ${text}`);
     };
 
     const showNotification = (type: 'success'|'error'|'info', message: string) => {
@@ -135,68 +85,18 @@ const AIChatPage: React.FC = () => {
         setTimeout(() => setNotification(null), 5000); 
     };
 
-    const fetchKnowledgeBase = async () => {
-        if (!supabase || !organization) return;
-        try {
-            const { data, error } = await supabase
-                .from('knowledge')
-                .select('id, content')
-                .eq('organization_id', organization.id)
-                .order('id', { ascending: false })
-                .limit(50);
-
-            if (!error && data) {
-                setKnowledgeItems(data);
-            }
-        } catch (e) {
-            console.error("Failed to fetch knowledge base", e);
-        }
-    };
-
     // --- SYNC SETTINGS FROM CONTEXT ---
     useEffect(() => {
-        // Only load if settings are available
         if (settings) {
-            setAccountSid(settings.twilio_account_sid || '');
-            setAuthToken(settings.twilio_auth_token || '');
             setMyPhoneNumber(settings.twilio_phone_number || '');
             if (settings.webhook_url) setWebhookUrl(settings.webhook_url);
-            if (settings.system_instruction) setSystemInstruction(settings.system_instruction);
 
             // Determine Mode
             if (settings.twilio_account_sid && settings.twilio_auth_token && mode === 'landing') {
                 setMode('dashboard');
             }
         }
-    }, [settings, mode]); // Only re-run if settings object reference changes
-
-    const handleSaveConfig = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-
-        // Save local items just in case (API Key is still local/secure storage ideally)
-        if (apiKey) localStorage.setItem('openai_api_key', apiKey); 
-
-        try {
-            // Update Context & DB via Option A
-            await updateUserSettings({
-                twilio_account_sid: accountSid,
-                twilio_auth_token: authToken,
-                twilio_phone_number: myPhoneNumber,
-                webhook_url: webhookUrl,
-                system_instruction: systemInstruction
-            });
-            
-            showNotification('success', 'Configuration saved successfully!');
-            setMode('dashboard');
-        } catch (err: any) {
-            console.error("Error saving settings:", err);
-            addLog(`Settings Save Error: ${err.message}`);
-            showNotification('error', 'Failed to save settings.');
-        } finally {
-            setLoading(false);
-        }
-    };
+    }, [settings, mode]); 
 
     // Fetch CRM Names to display in Chat
     useEffect(() => {
@@ -219,7 +119,6 @@ const AIChatPage: React.FC = () => {
 
         fetchLeadsMap();
 
-        // Subscribe to Leads changes
         const channel = supabase
             .channel('leads-name-sync')
             .on(
@@ -241,14 +140,9 @@ const AIChatPage: React.FC = () => {
         };
     }, [user]);
 
-    useEffect(() => {
-        if (!supabase || mode !== 'dashboard' || !organization) return;
-        fetchKnowledgeBase();
-    }, [mode, organization]);
-
     // Manual Classification Placeholder
     const classifyMessage = async (msgId: string, text: string) => {
-        showNotification('info', 'Manual analysis requested. Please check logs for AI output.');
+        showNotification('info', 'Manual analysis requested.');
     };
 
     // --- Chat History Logic ---
@@ -259,7 +153,6 @@ const AIChatPage: React.FC = () => {
             setIsHistoryLoading(true);
             try {
                 if (supabase && user) {
-                    addLog(`System: Syncing history from Database...`);
                     const { data, error } = await supabase
                         .from('messages')
                         .select('*')
@@ -284,7 +177,6 @@ const AIChatPage: React.FC = () => {
                         loadLocalHistory();
                     }
                 } else {
-                    addLog('System: Loading history from Local Storage (Demo Mode)...');
                     loadLocalHistory();
                 }
             } catch (e) {
@@ -336,8 +228,6 @@ const AIChatPage: React.FC = () => {
                         
                         setMessages(prev => {
                             if (prev.some(m => m.id === msgId)) return prev;
-                            
-                            addLog(`Realtime: 📩 New ${newMsg.direction} message [ID:${newMsg.id}]`);
                             const updated = [...prev, formattedMsg].sort((a, b) => a.fullTimestamp - b.fullTimestamp);
                             localStorage.setItem('demo_chat_history', JSON.stringify(updated));
                             return updated;
@@ -407,7 +297,6 @@ const AIChatPage: React.FC = () => {
              }
 
              // 2. Trigger Edge Function (Server-Side Logic)
-             // We manually invoke the webhook to simulate Twilio incoming message
              if (webhookUrl) {
                  addLog(`System: 🚀 Invoking Edge Function (Simulated Webhook)...`);
                  setAiStatus('Thinking...');
@@ -438,11 +327,10 @@ const AIChatPage: React.FC = () => {
                      addLog(`Error: Failed to call Webhook. ${err.message}`);
                      setAiStatus('Error');
                  } finally {
-                     // Status will clear or update when reply arrives via Realtime
                      setTimeout(() => setAiStatus(''), 5000);
                  }
              } else {
-                 addLog("Warning: No Webhook URL configured. Message saved but AI will not reply.");
+                 addLog("Warning: No Webhook URL configured.");
              }
 
         } else {
@@ -460,201 +348,6 @@ const AIChatPage: React.FC = () => {
                     timestamp: new Date().toLocaleTimeString(), fullTimestamp: Date.now() + 1, phone: targetPhone
                 }]);
             }, 1000);
-        }
-    };
-
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-            showNotification('info', `Reading ${file.name}...`);
-            
-            if (file.type === 'application/pdf') {
-                try {
-                    addLog("System: Reading PDF file...");
-                    
-                    // Set worker source if not already set.
-                    // Important: The browser loaded API version 5.4.530 (as per user logs), so we must force worker to match.
-                    // @ts-ignore
-                    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-                         // @ts-ignore
-                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs';
-                    }
-                    
-                    const arrayBuffer = await file.arrayBuffer();
-                    // Convert to Uint8Array for robustness
-                    const data = new Uint8Array(arrayBuffer);
-                    
-                    // @ts-ignore
-                    const loadingTask = pdfjsLib.getDocument({
-                        data,
-                        cMapUrl: 'https://esm.sh/pdfjs-dist@5.4.530/cmaps/',
-                        cMapPacked: true,
-                    });
-                    
-                    const pdf = await loadingTask.promise;
-                    let fullText = '';
-                    
-                    addLog(`System: PDF loaded. Extracting text from ${pdf.numPages} pages...`);
-
-                    for (let i = 1; i <= pdf.numPages; i++) {
-                        const page = await pdf.getPage(i);
-                        const textContent = await page.getTextContent();
-                        // @ts-ignore
-                        const pageText = textContent.items.map((item: any) => item.str).join(' ');
-                        fullText += pageText + '\n\n';
-                    }
-                    
-                    if (!fullText.trim()) {
-                        addLog("Warning: PDF extracted but no text found. It might be an image-only PDF.");
-                        showNotification('error', "No text found in PDF. Is it a scanned image?");
-                    } else {
-                         setKnowledgeInput(fullText);
-                         addLog(`System: PDF extraction complete.`);
-                         showNotification('success', "PDF text extracted. Click 'Save to Knowledge Base'.");
-                    }
-                } catch (err: any) {
-                    console.error("PDF Parse Error:", err);
-                    addLog(`Error: Failed to parse PDF file. ${err.message || err}`);
-                    showNotification('error', "Failed to read PDF.");
-                    if (err.message && err.message.includes('version')) {
-                         addLog("Hint: PDF Worker version mismatch. Please refresh to reset.");
-                    }
-                }
-            } else {
-                // Fallback for text-based files
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    const text = e.target?.result;
-                    if (typeof text === 'string') {
-                        setKnowledgeInput(text);
-                        addLog("System: Text file loaded.");
-                        showNotification('success', "File loaded. Click 'Save to Knowledge Base'.");
-                    }
-                };
-                reader.onerror = () => {
-                    showNotification('error', "Failed to read text file.");
-                }
-                reader.readAsText(file);
-            }
-        }
-    };
-
-    const handleScrape = async () => {
-        if (!urlInput || !supabase) return;
-        setIsScraping(true);
-        const domain = new URL(urlInput).hostname;
-        showNotification('info', `Using Smart Scraper on ${domain}...`);
-        addLog(`System: Smart Scraping content from ${urlInput} via Jina AI...`);
-        
-        try {
-            // Increased client timeout to 120s
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Request timed out (120s).")), 120000)
-            );
-
-            // Use Jina AI Reader Proxy: https://r.jina.ai/<url>
-            // This service renders JS and returns clean markdown, avoiding direct fetch blocks.
-            const jinaUrl = `https://r.jina.ai/${urlInput}`;
-
-            const requestPromise = supabase.functions.invoke('openai-proxy', {
-                body: { action: 'scrape', url: jinaUrl }
-            });
-
-            const { data, error } = await Promise.race([requestPromise, timeoutPromise]) as any;
-
-            if (error) {
-                console.error("Supabase Invoke Error:", error);
-                if (error.message && (error.message.includes('non-2xx') || error.message.includes('404'))) {
-                    throw new Error("Function not found. Please re-deploy 'openai-proxy'.");
-                }
-                throw error;
-            }
-            if (data?.error) throw new Error(data.error);
-            
-            if (data?.text && data.text.startsWith('Error:')) {
-                 addLog(data.text);
-                 showNotification('error', data.text);
-                 setKnowledgeInput(data.text); 
-            } else if (data?.text) {
-                setKnowledgeInput(data.text);
-                addLog('System: Content scraped successfully.');
-                showNotification('success', 'Content scraped successfully!');
-            } else {
-                addLog('Warning: No content extracted from URL.');
-                showNotification('error', 'No text found on page.');
-            }
-        } catch (e: any) {
-            console.error("Scrape Error:", e);
-            addLog(`Error: Scraping failed - ${e.message}`);
-            showNotification('error', `Scraping failed: ${e.message}`);
-        } finally {
-            setIsScraping(false);
-        }
-    };
-
-    const addKnowledge = async () => {
-        if (!knowledgeInput.trim() || !supabase || !organization) return;
-        setIsEmbedding(true);
-        try {
-            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-            const { data, error } = await supabase.functions.invoke('openai-proxy', {
-                body: { 
-                    action: 'embedding', 
-                    apiKey: activeKey,
-                    model: "text-embedding-3-small",
-                    input: knowledgeInput,
-                    dimensions: 768
-                }
-            });
-
-            if (error) throw new Error(error.message);
-            if (data?.error) throw new Error(data.error);
-
-            if (data?.data?.[0]?.embedding) {
-                 const { error: dbError } = await supabase.from('knowledge').insert({
-                    organization_id: organization.id,
-                    content: knowledgeInput,
-                    embedding: data.data[0].embedding,
-                    metadata: { source: 'manual', date: new Date().toISOString() }
-                });
-                if (dbError) throw dbError;
-                
-                setKnowledgeInput('');
-                addLog('System: Knowledge added successfully.');
-                showNotification('success', 'Knowledge saved to database.');
-                fetchKnowledgeBase();
-            }
-        } catch (e: any) {
-            console.error("Add Knowledge Error:", e);
-            addLog(`Error: ${e.message}`);
-            showNotification('error', 'Failed to save knowledge.');
-        } finally {
-            setIsEmbedding(false);
-        }
-    };
-
-    const checkWebhookReachability = async () => {
-        if (!webhookUrl) return;
-        setWebhookStatus('checking');
-        try {
-            const response = await fetch(webhookUrl, {
-                method: 'POST',
-                body: new URLSearchParams({
-                    Body: 'Ping from Dashboard',
-                    From: 'whatsapp:+0000000000',
-                    To: 'whatsapp:+0000000000'
-                })
-            });
-            if (response.ok) {
-                setWebhookStatus('success');
-                addLog('System: Webhook reachable.');
-            } else {
-                setWebhookStatus('error');
-                addLog(`System: Webhook returned ${response.status}`);
-            }
-        } catch (e: any) {
-            setWebhookStatus('error');
-            addLog(`System: Webhook unreachable. ${e.message}`);
         }
     };
 
@@ -677,73 +370,11 @@ const AIChatPage: React.FC = () => {
                         <Button 
                             size="lg" 
                             className="bg-blue-600 hover:bg-blue-500 text-white px-10 h-12 text-base shadow-lg shadow-blue-500/40 w-full sm:w-auto" 
-                            onClick={() => setMode('setup')}
+                            onClick={() => navigate('/console/settings')}
                         >
-                            Connect WhatsApp
+                            Configure in Settings
                         </Button>
                     </div>
-                </div>
-            </div>
-        );
-    }
-
-    if (mode === 'setup') {
-        return (
-            <div className="h-full overflow-y-auto p-4 lg:p-6 bg-slate-50">
-                <div className="max-w-3xl mx-auto space-y-6 animate-fadeInUp">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h1 className="text-3xl font-bold text-slate-900">Twilio Configuration</h1>
-                            <p className="text-slate-500">Enter your credentials to link your number.</p>
-                        </div>
-                        <Button variant="ghost" onClick={() => setMode('landing')} className="text-slate-500 hover:text-slate-900">
-                            Cancel
-                        </Button>
-                    </div>
-                    <Card className="border border-slate-200 bg-white text-slate-900 shadow-sm">
-                        <form onSubmit={handleSaveConfig}>
-                            <CardHeader>
-                                <CardTitle>Connection Details</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-6">
-                                <div className="space-y-2">
-                                    <label className="text-sm font-bold text-blue-600">API Key</label>
-                                    <Input value={apiKey} onChange={e => setApiKey(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="OpenAI API Key (Optional if set in Backend Secrets)" type="password" />
-                                    <p className="text-xs text-slate-500">
-                                        Note: We recommend setting <code>OPENAI_API_KEY</code> in Supabase Secrets for production.
-                                    </p>
-                                </div>
-                                <div className="border-t border-slate-200 my-4"></div>
-                                <div className="grid md:grid-cols-2 gap-6">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">Account SID</label>
-                                        <Input required value={accountSid} onChange={e => setAccountSid(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="AC..." />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">Auth Token</label>
-                                        <Input type="password" required value={authToken} onChange={e => setAuthToken(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="Token..." />
-                                    </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">Your Twilio Phone Number</label>
-                                    <Input required value={myPhoneNumber} onChange={e => setMyPhoneNumber(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-blue-600" placeholder="+1234567890" />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">Webhook URL</label>
-                                    <Input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="bg-slate-50 border-slate-300 font-mono text-slate-900" placeholder="https://..." />
-                                </div>
-                                <div className="space-y-2 pt-4 border-t border-slate-200">
-                                    <label className="text-sm font-medium">System Instructions</label>
-                                    <textarea className="w-full bg-slate-50 border border-slate-300 rounded-md p-3 text-sm h-32 focus:ring-1 focus:ring-blue-500 text-slate-900" value={systemInstruction} onChange={e => setSystemInstruction(e.target.value)} placeholder="You are a helpful assistant..." />
-                                </div>
-                            </CardContent>
-                            <CardFooter>
-                                <Button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-500 w-full">
-                                    {loading ? 'Saving...' : 'Save & Connect'}
-                                </Button>
-                            </CardFooter>
-                        </form>
-                    </Card>
                 </div>
             </div>
         );
@@ -751,7 +382,6 @@ const AIChatPage: React.FC = () => {
 
     return (
         <div className="h-full flex flex-col overflow-hidden bg-slate-50 relative">
-            {/* Toast Notification - Updated positioning and z-index */}
             {notification && (
                 <div className={cn(
                     "fixed top-20 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg border text-sm font-medium animate-fadeInUp flex items-center gap-2",
@@ -759,9 +389,6 @@ const AIChatPage: React.FC = () => {
                     notification.type === 'error' ? "bg-red-100 border-red-200 text-red-800" :
                     "bg-blue-100 border-blue-200 text-blue-800"
                 )}>
-                    {notification.type === 'success' && <CheckIcon className="w-4 h-4" />}
-                    {notification.type === 'error' && <AlertCircleIcon className="w-4 h-4" />}
-                    {notification.type === 'info' && <InfoIcon className="w-4 h-4" />}
                     {notification.message}
                 </div>
             )}
@@ -769,9 +396,9 @@ const AIChatPage: React.FC = () => {
             <header className="border-b border-slate-200 bg-white/80 p-4 flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-3">
                     <div className="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]"></div>
-                    <h1 className="font-bold text-slate-900 tracking-wide">AI Action Engine</h1>
+                    <h1 className="font-bold text-slate-900 tracking-wide">Live Simulator</h1>
                     <Badge variant="outline" className="text-xs border-slate-300 text-slate-500 hidden sm:inline-flex bg-slate-50">
-                        {webhookUrl ? 'Live Backend' : 'Simulator Mode'}
+                        {webhookUrl ? 'Live Backend' : 'Demo Mode'}
                     </Badge>
                 </div>
                 <div className="flex items-center gap-4">
@@ -781,126 +408,29 @@ const AIChatPage: React.FC = () => {
                             {organization ? organization.credits : <span className="animate-pulse">...</span>}
                         </div>
                     </div>
-                    <Button size="sm" variant="outline" className="border-slate-300 text-slate-600 hover:text-slate-900 hover:bg-slate-100" onClick={() => setMode('setup')}>
-                        Config
-                    </Button>
                 </div>
             </header>
 
-            <div className="flex-1 overflow-hidden">
-                <Tabs defaultValue="chat" className="h-full flex flex-col">
-                    <div className="px-6 pt-2 bg-white border-b border-slate-200 shrink-0">
-                         <TabsList className="bg-transparent h-12 gap-6 p-0">
-                            <TabsTrigger 
-                                value="chat" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
-                            >
-                                Live Chats
-                            </TabsTrigger>
-                            <TabsTrigger 
-                                value="knowledge" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
-                            >
-                                Knowledge Base (RAG)
-                            </TabsTrigger>
-                            <TabsTrigger 
-                                value="status" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
-                            >
-                                Connection Status
-                            </TabsTrigger>
-                            <TabsTrigger 
-                                value="logs" 
-                                className="h-full rounded-none border-b-2 border-transparent px-2 pb-3 text-sm font-medium text-slate-500 hover:text-slate-800 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600 transition-all data-[state=active]:bg-transparent"
-                            >
-                                System Logs
-                            </TabsTrigger>
-                        </TabsList>
-                    </div>
-
-                    <TabsContent value="chat" className="flex-1 overflow-hidden flex m-0 relative min-h-0 bg-slate-50">
-                        <SimulatorTab 
-                            chats={chats}
-                            selectedPhone={selectedPhone}
-                            setSelectedPhone={setSelectedPhone}
-                            searchQuery={searchQuery}
-                            setSearchQuery={setSearchQuery}
-                            messages={(selectedPhone && chats.find(([p]) => p === selectedPhone)?.[1]) || []}
-                            input={input}
-                            setInput={setInput}
-                            aiStatus={aiStatus}
-                            handleSimulatorSend={handleSimulatorSend}
-                            classifyMessage={classifyMessage}
-                            phoneToNameMap={phoneToNameMap}
-                        />
-                    </TabsContent>
-
-                    <TabsContent value="knowledge" className="flex-1 overflow-y-auto p-6 m-0 bg-slate-50">
-                        <KnowledgeBaseTab 
-                            urlInput={urlInput}
-                            setUrlInput={setUrlInput}
-                            handleScrape={handleScrape}
-                            isScraping={isScraping}
-                            fileInputRef={fileInputRef}
-                            handleFileUpload={handleFileUpload}
-                            knowledgeInput={knowledgeInput}
-                            setKnowledgeInput={setKnowledgeInput}
-                            addKnowledge={addKnowledge}
-                            isEmbedding={isEmbedding}
-                            knowledgeItems={knowledgeItems}
-                        />
-                     </TabsContent>
-
-                    <TabsContent value="status" className="flex-1 overflow-y-auto p-6 m-0 bg-slate-50">
-                        <ConnectionStatusTab 
-                            webhookUrl={webhookUrl}
-                            checkWebhookReachability={checkWebhookReachability}
-                            webhookStatus={webhookStatus}
-                        />
-                    </TabsContent>
-
-                    <TabsContent value="logs" className="flex-1 overflow-hidden m-0 bg-[#0c0c0c] text-white p-4 font-mono text-xs">
-                         <SystemLogsTab 
-                            logs={logs}
-                            messagesEndRef={messagesEndRef}
-                         />
-                    </TabsContent>
-                </Tabs>
-            </div>
+            <SimulatorTab 
+                chats={chats}
+                selectedPhone={selectedPhone}
+                setSelectedPhone={setSelectedPhone}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                messages={(selectedPhone && chats.find(([p]) => p === selectedPhone)?.[1]) || []}
+                input={input}
+                setInput={setInput}
+                aiStatus={aiStatus}
+                handleSimulatorSend={handleSimulatorSend}
+                classifyMessage={classifyMessage}
+                phoneToNameMap={phoneToNameMap}
+            />
         </div>
     );
 };
 
 function ChatIcon(props: React.SVGProps<SVGSVGElement>) {
     return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2v5Z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
-}
-
-function CheckIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-        </svg>
-    )
-}
-
-function AlertCircleIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" x2="12" y1="8" y2="12" />
-            <line x1="12" x2="12.01" y1="16" y2="16" />
-        </svg>
-    )
-}
-
-function InfoIcon(props: React.SVGProps<SVGSVGElement>) {
-    return (
-        <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" x2="12" y1="16" y2="12" />
-            <line x1="12" x2="12.01" y1="8" y2="8" />
-        </svg>
-    )
 }
 
 export default AIChatPage;
