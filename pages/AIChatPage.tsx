@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -8,7 +9,6 @@ import { cn } from '../lib/utils';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { processIncomingMessage } from '../services/aiEngine';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
 
 // Modular Tab Components
@@ -304,245 +304,10 @@ const AIChatPage: React.FC = () => {
         fetchKnowledgeBase();
     }, [mode, organization]);
 
-    const sendToTwilio = async (to: string, body: string) => {
-        if (!accountSid || !authToken || !myPhoneNumber) {
-            addLog("System: ⚠️ Twilio credentials missing. Reply saved to DB but not sent to WhatsApp.");
-            return;
-        }
-
-        const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
-        const formData = new URLSearchParams();
-        
-        let targetPhone = to.trim();
-        if (!targetPhone.includes('whatsapp:')) {
-            targetPhone = `whatsapp:${targetPhone}`;
-        }
-        
-        let sourcePhone = myPhoneNumber.trim();
-        if (!sourcePhone.includes('whatsapp:')) {
-            sourcePhone = `whatsapp:${sourcePhone}`;
-        }
-
-        formData.append('To', targetPhone);
-        formData.append('From', sourcePhone);
-        formData.append('Body', body);
-
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Basic ' + btoa(`${accountSid}:${authToken}`),
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: formData
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.message || response.statusText);
-            }
-            
-            addLog(`System: 📤 Sent to WhatsApp (${targetPhone})`);
-        } catch (error: any) {
-            console.error("Twilio Send Error:", error);
-            addLog(`Error: Twilio Send Failed - ${error.message}`);
-            if (error.message.includes('Failed to fetch')) {
-                 addLog("Hint: Browser blocked Twilio call (CORS). Use an Edge Function or Proxy for production.");
-            }
-        }
-    };
-
+    // Manual Classification Placeholder (Can be re-connected to backend if needed)
     const classifyMessage = async (msgId: string, text: string) => {
-        if (!supabase || !user) return;
-        setAiStatus('Analyzing...');
-        try {
-            setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
-            
-            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-            
-            // Timeout safety - Increased to 120s
-            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 120000));
-            
-            const orgId = organization ? organization.id : 'demo-org';
-
-            const processPromise = processIncomingMessage(
-                text, 
-                user.id,
-                orgId,
-                systemInstructionRef.current,
-                [], 
-                activeKey
-            );
-            
-            const result: any = await Promise.race([processPromise, timeoutPromise]);
-            const { intent } = result;
-            
-            await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
-            setAiStatus('');
-        } catch (e) {
-            console.error("Classification error", e);
-            setAiStatus('Error');
-            await supabase.from('messages').update({ intent_tag: 'Manual Review' }).eq('id', msgId);
-        }
-    };
-
-    const processAndReplyToMessage = async (msgId: string, text: string, phone: string) => {
-        if (!supabase || !user) return;
-        
-        addLog(`AI Brain: 🧠 Processing message [${msgId}] locally...`);
-        setAiStatus('Analyzing...');
-
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, intent_tag: 'Analysing...' } : m));
-
-        try {
-            const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-            
-            // Race against a timeout to ensure we don't hang indefinitely. Increased to 120s.
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Processing timed out (120s)")), 120000)
-            );
-
-            // Get Chat History
-            const historyRaw = messagesRef.current
-                .filter(m => m.phone === phone && m.id !== msgId && m.sender !== 'system') // Filter by phone, remove current, remove logs
-                .sort((a, b) => a.fullTimestamp - b.fullTimestamp);
-
-            // Map to OpenAI format
-            const chatHistory = historyRaw.slice(-10).map(m => ({
-                role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-                content: m.text
-            }));
-
-            // Pass Org ID to avoid extra DB lookup in retrieval
-            const orgId = organization ? organization.id : 'demo-org';
-
-            const processPromise = processIncomingMessage(
-                text,
-                user.id,
-                orgId,
-                systemInstructionRef.current,
-                chatHistory,
-                activeKey
-            );
-
-            // Wait for result or timeout
-            const result: any = await Promise.race([processPromise, timeoutPromise]);
-            const { intent, reply, contextUsed, action } = result;
-
-            // Update intent
-            await supabase.from('messages').update({ intent_tag: intent }).eq('id', msgId);
-
-            // --- CRM ACTION HANDLER: BOOKING & RESCHEDULING ---
-            if (action && (action.type === 'SCHEDULE_VIEWING' || action.type === 'REQUEST_VIEWING' || action.type === 'RESCHEDULE_APPOINTMENT')) {
-                addLog(`CRM Action: 📅 Booking/Update Intent Detected. Updating Lead...`);
-                
-                // Use the AI extracted date if available, otherwise default to 24h later
-                let nextAppt = new Date(Date.now() + 86400000).toISOString(); 
-                
-                if (action.parameters && action.parameters.appointmentDate) {
-                    const extractedDate = new Date(action.parameters.appointmentDate);
-                    // Basic validation to ensure it's a valid date
-                    if (!isNaN(extractedDate.getTime())) {
-                        nextAppt = extractedDate.toISOString();
-                        addLog(`CRM: 🕒 AI Extracted Appointment Time: ${nextAppt}`);
-                    }
-                }
-                
-                // Prepare updates
-                const updates: any = {
-                    status: 'Proposal',
-                    next_appointment: nextAppt,
-                    ai_analysis: `Booking Update: ${action.reason}`
-                };
-
-                // HANDLE PROJECT/PROPERTY INTEREST UPDATE
-                // If user mentions a specific project, we want to tag them with it
-                if (action.parameters && action.parameters.propertyInterest) {
-                    const project = action.parameters.propertyInterest;
-                    addLog(`CRM: 🏷️ New Project Interest Detected: ${project}`);
-                    
-                    // Fetch existing tags to append
-                    const { data: existingLead } = await supabase.from('leads').select('tags').match({ user_id: user.id, phone: phone }).maybeSingle();
-                    let newTags = existingLead?.tags || [];
-                    
-                    // Simple dedupe
-                    if (!newTags.some((t: string) => t.toLowerCase() === project.toLowerCase())) {
-                        newTags.push(project);
-                    }
-                    updates.tags = newTags;
-                    updates.ai_analysis += ` | Interested in: ${project}`;
-                }
-
-                // Execute Update
-                const { error: leadError } = await supabase.from('leads').update(updates).match({ user_id: user.id, phone: phone });
-
-                if (leadError) {
-                    console.error("Failed to update CRM lead:", leadError);
-                } else {
-                    const actionName = action.type === 'RESCHEDULE_APPOINTMENT' ? 'Rescheduled' : 'Booking';
-                    addLog(`CRM: ✅ Lead ${phone} updated (${actionName}).`);
-                    showNotification('success', `${actionName} Confirmed for ${phone}!`);
-                }
-            } 
-            // --- CRM ACTION HANDLER: CANCELLATION TRIGGER ---
-            else if (action && action.type === 'CANCEL_APPOINTMENT') {
-                addLog(`CRM Action: ❌ Cancellation Intent Detected. Updating Lead...`);
-                
-                const { error: leadError } = await supabase.from('leads').update({
-                    next_appointment: null,
-                    status: 'Qualified', // Revert status so they aren't 'Proposal' without a date
-                    ai_analysis: `Appointment cancelled by user: ${action.reason}`
-                }).match({ user_id: user.id, phone: phone });
-
-                if (leadError) {
-                    console.error("Failed to cancel appointment:", leadError);
-                } else {
-                    addLog(`CRM: 🗑️ Appointment removed for ${phone}. Status reverted to 'Qualified'.`);
-                    showNotification('info', `Appointment cancelled for ${phone}.`);
-                }
-            }
-
-            setAiStatus(contextUsed ? 'Knowledge Used' : 'Replying...');
-            // Small delay for UX naturalness, but only if it was fast
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Send Reply
-            await supabase.from('messages').insert({
-                user_id: user.id,
-                text: reply,
-                sender: 'bot',
-                direction: 'outbound',
-                phone: phone
-            });
-
-            addLog(`AI Brain: ✅ Replied to [${msgId}] internally.`);
-            setAiStatus('');
-
-            if (webhookUrl) {
-                await sendToTwilio(phone, reply);
-            }
-
-        } catch (error: any) {
-            console.error("AI Processing Failed:", error);
-            addLog(`Error: AI Failed - ${error.message}`);
-            setAiStatus('Error');
-            
-            const fallbackReply = "I apologize, but I am experiencing high traffic. A human agent will be with you shortly.";
-            
-            await supabase.from('messages').insert({
-                user_id: user.id,
-                text: fallbackReply,
-                sender: 'bot',
-                direction: 'outbound',
-                phone: phone
-            });
-            
-            await supabase.from('messages').update({ intent_tag: 'System Error' }).eq('id', msgId);
-            
-            if (webhookUrl) {
-                await sendToTwilio(phone, fallbackReply);
-            }
-        }
+        showNotification('info', 'Manual analysis requested. Please check logs for AI output.');
+        // This feature can be re-enabled by creating a dedicated Edge Function endpoint for analysis.
     };
 
     useEffect(() => {
@@ -637,19 +402,6 @@ const AIChatPage: React.FC = () => {
                         });
                         
                         if (!selectedPhone) setSelectedPhone(newMsg.phone);
-
-                        // --- SMART HANDOFF LOGIC ---
-                        // Only process locally if the message is "inbound" AND hasn't been processed by the backend yet.
-                        // If the backend processed it, intent_tag will be 'General Chat', 'Inquiry', etc.
-                        // If it's fresh, intent_tag is usually 'Processing...' or null.
-                        const isProcessedByBackend = newMsg.intent_tag && newMsg.intent_tag !== 'Processing...';
-                        
-                        if (
-                            (newMsg.direction === 'inbound' || newMsg.sender === 'user') && 
-                            !isProcessedByBackend
-                        ) {
-                            processAndReplyToMessage(msgId, newMsg.text, newMsg.phone);
-                        }
                     }
                 )
                 .on(
@@ -676,7 +428,7 @@ const AIChatPage: React.FC = () => {
         }
     }, [mode, user]); 
 
-    // Handle Manual Send from new ChatWindow
+    // Handle Manual Send from ChatWindow (Simulating Customer)
     const handleSimulatorSend = async (text: string) => {
         if (!text.trim()) return;
         
@@ -688,7 +440,7 @@ const AIChatPage: React.FC = () => {
                 sender: 'system',
                 timestamp: new Date().toLocaleTimeString(),
                 fullTimestamp: Date.now(),
-                direction: 'outbound' // System messages shown as outbound-ish
+                direction: 'outbound'
              }]);
              return;
         }
@@ -697,6 +449,7 @@ const AIChatPage: React.FC = () => {
         setInput(''); 
         
         if (supabase && user) {
+             // 1. Save to DB (Simulate User Message)
              const { error } = await supabase.from('messages').insert({
                 user_id: user.id,
                 text: text,
@@ -706,43 +459,62 @@ const AIChatPage: React.FC = () => {
                 intent_tag: 'Processing...'
              });
              
-             if (error) addLog(`Error: Failed to save to DB. ${error.message}`);
+             if (error) {
+                 addLog(`Error: Failed to save to DB. ${error.message}`);
+                 return;
+             }
+
+             // 2. Trigger Edge Function (Server-Side Logic)
+             // We manually invoke the webhook to simulate Twilio incoming message
+             if (webhookUrl) {
+                 addLog(`System: 🚀 Invoking Edge Function (Simulated Webhook)...`);
+                 setAiStatus('Thinking...');
+                 
+                 try {
+                     const formData = new URLSearchParams();
+                     formData.append('Body', text);
+                     formData.append('From', `whatsapp:${targetPhone}`);
+                     // The 'To' should match the merchant's Twilio Number for the Edge Function to find the profile
+                     const merchantPhone = myPhoneNumber || 'whatsapp:+14155238886'; 
+                     formData.append('To', merchantPhone.includes('whatsapp:') ? merchantPhone : `whatsapp:${merchantPhone}`);
+
+                     const res = await fetch(webhookUrl, {
+                         method: 'POST',
+                         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                         body: formData
+                     });
+                     
+                     if (res.ok) {
+                         addLog(`System: ✅ Edge Function invoked successfully.`);
+                     } else {
+                         const errText = await res.text();
+                         addLog(`Error: Edge Function returned ${res.status} - ${errText}`);
+                         setAiStatus('Error');
+                     }
+                 } catch (err: any) {
+                     console.error("Webhook Call Error:", err);
+                     addLog(`Error: Failed to call Webhook. ${err.message}`);
+                     setAiStatus('Error');
+                 } finally {
+                     // Status will clear or update when reply arrives via Realtime
+                     setTimeout(() => setAiStatus(''), 5000);
+                 }
+             } else {
+                 addLog("Warning: No Webhook URL configured. Message saved but AI will not reply.");
+             }
 
         } else {
-            const demoId = Date.now().toString();
+            // Offline Demo Mode
             setMessages(prev => [...prev, {
-                id: demoId, text: text, sender: 'user', direction: 'inbound', 
+                id: Date.now().toString(),
+                text: text, sender: 'user', direction: 'inbound', 
                 timestamp: new Date().toLocaleTimeString(), fullTimestamp: Date.now(), 
-                phone: targetPhone, intent_tag: 'Analysing...'
+                phone: targetPhone, intent_tag: 'Demo Mode'
             }]);
             
-            setTimeout(async () => {
-                 const activeKey = apiKey || getEnv('VITE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY');
-                 
-                 // Get Chat History for Demo
-                 const historyRaw = messagesRef.current
-                    .filter(m => m.phone === targetPhone && m.id !== demoId && m.sender !== 'system')
-                    .sort((a, b) => a.fullTimestamp - b.fullTimestamp);
-
-                 const chatHistory = historyRaw.slice(-10).map(m => ({
-                    role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-                    content: m.text
-                 }));
-
-                 const orgId = organization ? organization.id : 'demo-org';
-
-                 const { intent, reply } = await processIncomingMessage(
-                     text, 
-                     'demo', 
-                     orgId,
-                     systemInstructionRef.current, 
-                     chatHistory, 
-                     activeKey
-                 );
-
-                 setMessages(prev => prev.map(m => m.id === demoId ? { ...m, intent_tag: intent } : m));
+            setTimeout(() => {
                  setMessages(prev => [...prev, {
-                    id: (Date.now() + 1).toString(), text: reply, sender: 'bot', direction: 'outbound', 
+                    id: (Date.now() + 1).toString(), text: "I'm in Demo Mode. Connect Supabase to use the AI Agent.", sender: 'bot', direction: 'outbound', 
                     timestamp: new Date().toLocaleTimeString(), fullTimestamp: Date.now() + 1, phone: targetPhone
                 }]);
             }, 1000);
