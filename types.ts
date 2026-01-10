@@ -45,6 +45,17 @@ export interface UserProfile {
   twilio_phone_number?: string; // Persisted Twilio Number
 }
 
+export interface UserSettings {
+  user_id: string;
+  twilio_account_sid?: string;
+  twilio_auth_token?: string;
+  twilio_phone_number?: string;
+  webhook_url?: string;
+  system_instruction?: string;
+  model?: string;
+  updated_at?: string;
+}
+
 export interface Lead {
   id: number;
   user_id: string;

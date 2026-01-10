@@ -45,19 +45,11 @@ const getEnv = (key: string) => {
             val = (import.meta as any).env[key];
         }
     } catch (e) {}
-
-    if (!val) {
-        try {
-            if (typeof process !== 'undefined' && process.env && process.env[key]) {
-                val = process.env[key] as string;
-            }
-        } catch (e) {}
-    }
     return val;
 };
 
 const AIChatPage: React.FC = () => {
-    const { user, profile, organization, deductCredit } = useAuth();
+    const { user, profile, organization, deductCredit, settings, updateUserSettings } = useAuth();
     const navigate = useNavigate();
 
     // --- View State ---
@@ -70,10 +62,10 @@ const AIChatPage: React.FC = () => {
     // --- State: Configuration ---
     const [loading, setLoading] = useState(false);
     
-    // --- State: Credentials ---
-    const [accountSid, setAccountSid] = useState(() => getEnv('VITE_TWILIO_ACCOUNT_SID') || getEnv('TWILIO_ACCOUNT_SID') || '');
-    const [authToken, setAuthToken] = useState(() => getEnv('VITE_TWILIO_AUTH_TOKEN') || getEnv('TWILIO_AUTH_TOKEN') || '');
-    const [myPhoneNumber, setMyPhoneNumber] = useState(() => getEnv('VITE_TWILIO_PHONE_NUMBER') || getEnv('TWILIO_PHONE_NUMBER') || '');
+    // --- State: Credentials (Synced from AuthContext) ---
+    const [accountSid, setAccountSid] = useState('');
+    const [authToken, setAuthToken] = useState('');
+    const [myPhoneNumber, setMyPhoneNumber] = useState('');
     const [webhookUrl, setWebhookUrl] = useState('https://rwlecxyfukzberxcpqnr.supabase.co/functions/v1/dynamic-endpoint');
     const [apiKey, setApiKey] = useState('');
     
@@ -95,7 +87,7 @@ const AIChatPage: React.FC = () => {
     
     // --- State: Data ---
     const [messages, setMessages] = useState<SimMessage[]>([]);
-    const messagesRef = useRef<SimMessage[]>([]); // Ref to hold latest messages for async callbacks
+    const messagesRef = useRef<SimMessage[]>([]);
     
     // CRM Data Mapping
     const [phoneToNameMap, setPhoneToNameMap] = useState<Record<string, string>>({});
@@ -161,98 +153,50 @@ const AIChatPage: React.FC = () => {
         }
     };
 
+    // --- SYNC SETTINGS FROM CONTEXT ---
+    useEffect(() => {
+        // Only load if settings are available
+        if (settings) {
+            setAccountSid(settings.twilio_account_sid || '');
+            setAuthToken(settings.twilio_auth_token || '');
+            setMyPhoneNumber(settings.twilio_phone_number || '');
+            if (settings.webhook_url) setWebhookUrl(settings.webhook_url);
+            if (settings.system_instruction) setSystemInstruction(settings.system_instruction);
+
+            // Determine Mode
+            if (settings.twilio_account_sid && settings.twilio_auth_token && mode === 'landing') {
+                setMode('dashboard');
+            }
+        }
+    }, [settings, mode]); // Only re-run if settings object reference changes
+
     const handleSaveConfig = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
 
+        // Save local items just in case (API Key is still local/secure storage ideally)
         if (apiKey) localStorage.setItem('openai_api_key', apiKey); 
 
-        localStorage.setItem('twilio_user_config', JSON.stringify({
-             accountSid, authToken, phoneNumber: myPhoneNumber, webhookUrl, systemInstruction
-        }));
-
-        if (supabase && user) {
-            try {
-                await supabase.from('user_settings').upsert({
-                    user_id: user.id,
-                    twilio_account_sid: accountSid,
-                    twilio_auth_token: authToken,
-                    twilio_phone_number: myPhoneNumber,
-                    webhook_url: webhookUrl,
-                    system_instruction: systemInstruction,
-                    updated_at: new Date().toISOString()
-                });
-            } catch (err: any) {
-                console.error("Error saving settings to DB:", err);
-                addLog(`Settings Save Error: ${err.message}`);
-            }
+        try {
+            // Update Context & DB via Option A
+            await updateUserSettings({
+                twilio_account_sid: accountSid,
+                twilio_auth_token: authToken,
+                twilio_phone_number: myPhoneNumber,
+                webhook_url: webhookUrl,
+                system_instruction: systemInstruction
+            });
+            
+            showNotification('success', 'Configuration saved successfully!');
+            setMode('dashboard');
+        } catch (err: any) {
+            console.error("Error saving settings:", err);
+            addLog(`Settings Save Error: ${err.message}`);
+            showNotification('error', 'Failed to save settings.');
+        } finally {
+            setLoading(false);
         }
-        
-        setLoading(false);
-        setMode('dashboard');
     };
-
-    useEffect(() => {
-        const loadConfig = async () => {
-            const localKey = localStorage.getItem('openai_api_key');
-            if (localKey) setApiKey(localKey);
-
-            if (!supabase || !user) {
-                const savedConfig = localStorage.getItem('twilio_user_config');
-                if (savedConfig) {
-                    const parsed = JSON.parse(savedConfig);
-                    setAccountSid(parsed.accountSid || '');
-                    setAuthToken(parsed.authToken || '');
-                    setMyPhoneNumber(parsed.phoneNumber || ''); 
-                    setWebhookUrl(parsed.webhookUrl || '');
-                    if (parsed.systemInstruction) setSystemInstruction(parsed.systemInstruction);
-                    
-                    if (parsed.accountSid && parsed.authToken) {
-                        setMode('dashboard');
-                    }
-                }
-                return;
-            }
-
-            try {
-                // Add retries to handle case where DB or Table is waking up
-                let data = null;
-                let retries = 0;
-                
-                while (!data && retries < 4) {
-                    const { data: fetched, error } = await supabase
-                        .from('user_settings')
-                        .select('*')
-                        .eq('user_id', user.id)
-                        .maybeSingle();
-                    
-                    if (fetched) {
-                        data = fetched;
-                    } else {
-                        retries++;
-                        // Wait longer between retries (500ms)
-                        await new Promise(r => setTimeout(r, 500));
-                    }
-                }
-                
-                if (data) {
-                    setAccountSid(data.twilio_account_sid || '');
-                    setAuthToken(data.twilio_auth_token || '');
-                    setMyPhoneNumber(data.twilio_phone_number || '');
-                    setWebhookUrl(data.webhook_url || '');
-                    if (data.system_instruction) setSystemInstruction(data.system_instruction);
-
-                    if (data.twilio_account_sid && data.twilio_phone_number && mode === 'landing') {
-                        setMode('dashboard');
-                    }
-                }
-            } catch (err) {
-                console.error("Error loading config:", err);
-            }
-        };
-
-        loadConfig();
-    }, [user]);
 
     // Fetch CRM Names to display in Chat
     useEffect(() => {
@@ -267,8 +211,6 @@ const AIChatPage: React.FC = () => {
             if (data) {
                 const map: Record<string, string> = {};
                 data.forEach((l: any) => {
-                    // Normalize phone: strip spaces and standard chars if needed, 
-                    // but usually direct match is safest if format is consistent
                     if (l.phone) map[l.phone] = l.name;
                 });
                 setPhoneToNameMap(map);
@@ -277,7 +219,7 @@ const AIChatPage: React.FC = () => {
 
         fetchLeadsMap();
 
-        // Subscribe to Leads changes to update names in real-time
+        // Subscribe to Leads changes
         const channel = supabase
             .channel('leads-name-sync')
             .on(
@@ -304,12 +246,12 @@ const AIChatPage: React.FC = () => {
         fetchKnowledgeBase();
     }, [mode, organization]);
 
-    // Manual Classification Placeholder (Can be re-connected to backend if needed)
+    // Manual Classification Placeholder
     const classifyMessage = async (msgId: string, text: string) => {
         showNotification('info', 'Manual analysis requested. Please check logs for AI output.');
-        // This feature can be re-enabled by creating a dedicated Edge Function endpoint for analysis.
     };
 
+    // --- Chat History Logic ---
     useEffect(() => {
         if (mode !== 'dashboard') return;
 

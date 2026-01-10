@@ -2,23 +2,26 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
-import { Plan, UserProfile, Organization, PLAN_LIMITS } from '../types';
+import { Plan, UserProfile, Organization, UserSettings, PLAN_LIMITS } from '../types';
 
 // Storage keys
 const PROFILE_KEY = 'inshoppe-profile';
 const ORG_KEY = 'inshoppe-org';
+const SETTINGS_KEY = 'inshoppe-settings';
 
 interface AuthContextType {
   session: Session | null;
   user: User | null;
   profile: UserProfile | null;
   organization: Organization | null;
+  settings: UserSettings | null; // Added Settings
   loading: boolean;
   signIn: (email: string, pass: string) => Promise<{ error: any; data: any }>;
   signUp: (email: string, pass: string, companyName: string) => Promise<{ error: any; data: any }>;
   signOut: () => Promise<void>;
   upgradePlan: (plan: Plan, creditsToAdd: number) => Promise<void>;
   deductCredit: () => Promise<boolean>; 
+  updateUserSettings: (newSettings: Partial<UserSettings>) => Promise<void>; // Added Update Method
   isWhatsAppConnected: boolean;
   connectWhatsApp: () => void;
   isDemoMode: boolean;
@@ -31,6 +34,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
+  const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [isWhatsAppConnected, setIsWhatsAppConnected] = useState(false);
 
@@ -62,9 +66,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Fallback for demo without Supabase auth flow
           const savedProfile = localStorage.getItem(PROFILE_KEY);
           const savedOrg = localStorage.getItem(ORG_KEY);
+          const savedSettings = localStorage.getItem(SETTINGS_KEY);
+
           if (mounted) {
               if (savedProfile) setProfile(JSON.parse(savedProfile));
               if (savedOrg) setOrganization(JSON.parse(savedOrg));
+              if (savedSettings) setSettings(JSON.parse(savedSettings));
+              
               // Mock user session if profile exists in local storage
               if (savedProfile) {
                   const parsedProfile = JSON.parse(savedProfile);
@@ -88,7 +96,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initAuth();
 
     // Safety timeout: If auth takes longer than 5 seconds, force loading to false
-    // Increased from 3s to 5s to allow for cold start retries
     const safetyTimeout = setTimeout(() => {
         if (mounted && loading) {
             console.warn("Auth timed out, forcing app load");
@@ -103,7 +110,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
             if (!mounted) return;
             
-            // Only update if session actually changed or we need to re-fetch
             const currentUser = session?.user ?? null;
             setSession(session);
             setUser(currentUser);
@@ -116,10 +122,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             } else {
                 setProfile(null);
                 setOrganization(null);
+                setSettings(null);
             }
-            // Note: We don't forcefully set loading(false) here immediately to avoid flickering
-            // if initAuth is still running. initAuth's finally block handles the initial load completion.
-            // But for subsequent auth changes (sign in/out), we might want to manage loading state if needed.
         });
         authListener = data;
     }
@@ -133,19 +137,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // --- Profile & Org Management ---
+  // --- Profile, Org & Settings Management ---
 
   const loadProfileAndOrg = async (userId: string, userEmail?: string) => {
     if (!supabase) return;
 
     try {
       // 1. Fetch Profile
-      // Increased retries to 6 (approx 3s) to handle database cold starts
       let profileData = null;
       let retries = 0;
       
       while (!profileData && retries < 6) {
-          const { data, error } = await supabase
+          const { data } = await supabase
               .from('profiles')
               .select('*')
               .eq('id', userId)
@@ -160,11 +163,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // --- SELF REPAIR LOGIC ---
-      // If profile is missing (e.g. user signed up before SQL script was run), create it now.
       if (!profileData && userEmail) {
           console.warn("Profile missing. Attempting self-repair...");
           try {
-              // 1. Create Org
               const { data: newOrg, error: orgError } = await supabase
                   .from('organizations')
                   .insert({ name: 'My Workspace', plan: 'Free', credits: 30 })
@@ -172,7 +173,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   .single();
 
               if (newOrg && !orgError) {
-                  // 2. Create Profile
                   const { data: newProfile, error: profileError } = await supabase
                       .from('profiles')
                       .insert({ 
@@ -186,9 +186,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                       .single();
                   
                   if (newProfile && !profileError) {
-                      console.log("Self-repair successful. Profile created.");
                       profileData = newProfile;
-                      // Also init user_settings
                       await supabase.from('user_settings').insert({ user_id: userId });
                   }
               }
@@ -201,7 +199,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfile(profileData);
           
           // 2. Fetch Organization
-          // Add retries for organization as well
           let orgData = null;
           let orgRetries = 0;
           
@@ -219,16 +216,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   await new Promise(r => setTimeout(r, 500));
               }
           }
+          if (orgData) setOrganization(orgData);
+
+          // 3. Fetch User Settings (NEW)
+          const { data: settingsData } = await supabase
+              .from('user_settings')
+              .select('*')
+              .eq('user_id', userId)
+              .maybeSingle();
           
-          if (orgData) {
-              setOrganization(orgData);
+          if (settingsData) {
+              setSettings(settingsData);
           }
-      } else {
-          console.warn("Profile could not be loaded or created. Please check database tables.");
-      }
+      } 
     } catch (e) {
-      console.error("Error loading profile/org:", e);
+      console.error("Error loading profile/org/settings:", e);
     }
+  };
+
+  const updateUserSettings = async (newSettings: Partial<UserSettings>) => {
+      if (!user) return;
+
+      if (supabase) {
+          const { error } = await supabase
+              .from('user_settings')
+              .upsert({ user_id: user.id, ...newSettings, updated_at: new Date().toISOString() });
+          
+          if (error) {
+              console.error("Failed to update settings:", error);
+              throw error;
+          }
+      }
+
+      setSettings(prev => {
+          const updated = prev ? { ...prev, ...newSettings } : { user_id: user.id, ...newSettings };
+          // Sync local storage for demo/consistency
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+          return updated;
+      });
   };
 
   const upgradePlan = async (newPlan: Plan, creditsToAdd: number) => {
@@ -236,7 +261,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const nextMonth = new Date(now.setMonth(now.getMonth() + 1)).toISOString();
 
     if (supabase && organization) {
-        // Update DB
         const { error } = await supabase.from('organizations').update({
             plan: newPlan,
             credits: organization.credits + creditsToAdd,
@@ -255,7 +279,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setOrganization(updatedOrg);
         }
     } else {
-        // Local Demo Fallback
         if (!organization) return;
         const updatedOrg = { 
             ...organization, 
@@ -286,26 +309,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const updated = { ...organization, credits: newCredits };
       setOrganization(updated);
-      localStorage.setItem(ORG_KEY, JSON.stringify(updated)); // Sync local for consistency
+      localStorage.setItem(ORG_KEY, JSON.stringify(updated));
       return true;
   };
 
   // --- Auth Functions ---
 
   const signIn = async (email: string, pass: string) => {
-    // 1. Try Supabase Auth
     if (supabase) {
         try {
             const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
             if (!error && data.session) return { data, error: null };
-            // If error, fall through to check for demo mode, or return error
             if (error) return { data: null, error };
         } catch (e) {
             console.error("Supabase signin failed", e);
         }
     }
 
-    // 2. Demo/Offline Mode Fallback
+    // Demo Mode Fallback
     const mockUser = { id: 'user_demo_123', email: email } as User;
     const mockProfile: UserProfile = {
         id: 'user_demo_123',
@@ -321,13 +342,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         credits: 30,
         subscription_status: 'active'
     };
+    const mockSettings: UserSettings = {
+        user_id: 'user_demo_123',
+        system_instruction: "You are a helpful assistant."
+    };
 
     setUser(mockUser);
     setProfile(mockProfile);
     setOrganization(mockOrg);
+    setSettings(mockSettings);
     
     localStorage.setItem(PROFILE_KEY, JSON.stringify(mockProfile));
     localStorage.setItem(ORG_KEY, JSON.stringify(mockOrg));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(mockSettings));
 
     return { data: { user: mockUser, session: { user: mockUser } }, error: null };
   };
@@ -336,8 +363,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const finalCompanyName = companyName || "My Workspace";
 
     if (supabase) {
-        // We now rely on a POSTGRES TRIGGER to create the profile and organization.
-        // We pass the company_name in the user_metadata so the trigger can access it.
         const { data: authData, error: authError } = await supabase.auth.signUp({ 
             email, 
             password: pass,
@@ -348,12 +373,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
             }
         });
-        
         return { data: authData, error: authError };
     }
 
-    // Demo Mode Sign Up (Mock)
-    console.log("Supabase not available, using Demo Sign Up");
+    // Demo Mode Sign Up
     const mockUser = { id: 'user_demo_123', email: email } as User;
     const mockProfile: UserProfile = {
         id: 'user_demo_123',
@@ -369,13 +392,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         credits: 30,
         subscription_status: 'active'
     };
+    const mockSettings: UserSettings = {
+        user_id: 'user_demo_123'
+    };
 
     setUser(mockUser);
     setProfile(mockProfile);
     setOrganization(mockOrg);
+    setSettings(mockSettings);
     
     localStorage.setItem(PROFILE_KEY, JSON.stringify(mockProfile));
     localStorage.setItem(ORG_KEY, JSON.stringify(mockOrg));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(mockSettings));
     
     return { data: { user: mockUser, session: { user: mockUser } }, error: null };
   };
@@ -383,8 +411,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async () => {
     try {
         if (supabase) {
-            // Race Supabase signOut against a 2-second timeout to prevent UI hanging
-            // if the server or network is unresponsive.
             await Promise.race([
                 supabase.auth.signOut(),
                 new Promise(resolve => setTimeout(resolve, 2000))
@@ -393,18 +419,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
         console.error("Error signing out from Supabase:", error);
     } finally {
-        // Always clean up local state
         setSession(null);
         setUser(null);
         setOrganization(null);
         setProfile(null);
+        setSettings(null);
         
-        // Clear app specific keys
         localStorage.removeItem(PROFILE_KEY); 
         localStorage.removeItem(ORG_KEY);
+        localStorage.removeItem(SETTINGS_KEY);
 
-        // AGGRESSIVE CLEANUP: Clear Supabase session tokens from localStorage
-        // This ensures that even if the network signOut failed, the local session is dead.
         Object.keys(localStorage).forEach(key => {
             if (key.startsWith('sb-') || key.includes('supabase')) {
                 localStorage.removeItem(key);
@@ -422,12 +446,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     user,
     profile,
     organization,
+    settings,
     loading,
     signIn,
     signUp,
     signOut,
     upgradePlan,
     deductCredit,
+    updateUserSettings,
     isWhatsAppConnected,
     connectWhatsApp,
     isDemoMode: !isSupabaseConfigured
