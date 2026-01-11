@@ -172,7 +172,21 @@ create table if not exists generated_documents (
   created_at timestamptz default now()
 );
 
--- 10. Vector Search Function
+-- 10. CREATE BOOKINGS TABLE (Shared Schedule)
+create table if not exists bookings (
+  id uuid default gen_random_uuid() primary key,
+  organization_id uuid references organizations(id),
+  lead_id bigint references leads(id),
+  created_by uuid references auth.users(id),
+  title text not null,
+  description text,
+  start_time timestamptz not null,
+  end_time timestamptz not null,
+  status text default 'scheduled', -- 'scheduled', 'cancelled', 'completed'
+  created_at timestamptz default now()
+);
+
+-- 11. Vector Search Function
 create or replace function match_knowledge (
   query_embedding vector(768),
   match_threshold float,
@@ -198,7 +212,7 @@ begin
 end;
 $$;
 
--- 11. Enable RLS
+-- 12. Enable RLS
 alter table profiles enable row level security;
 alter table organizations enable row level security;
 alter table messages enable row level security;
@@ -208,8 +222,9 @@ alter table early_access_signups enable row level security;
 alter table user_settings enable row level security;
 alter table document_templates enable row level security;
 alter table generated_documents enable row level security;
+alter table bookings enable row level security;
 
--- 12. RLS Policies
+-- 13. RLS Policies
 
 -- Profiles
 drop policy if exists "Public profiles access" on profiles;
@@ -262,6 +277,25 @@ create policy "Org members can insert knowledge" on knowledge for insert with ch
   organization_id in (select organization_id from profiles where profiles.id = auth.uid())
 );
 
+-- Bookings (Secured by Organization - Shared)
+drop policy if exists "Org members can read bookings" on bookings;
+drop policy if exists "Org members can insert bookings" on bookings;
+drop policy if exists "Org members can update bookings" on bookings;
+drop policy if exists "Org members can delete bookings" on bookings;
+
+create policy "Org members can read bookings" on bookings for select using (
+  organization_id in (select organization_id from profiles where profiles.id = auth.uid())
+);
+create policy "Org members can insert bookings" on bookings for insert with check (
+  organization_id in (select organization_id from profiles where profiles.id = auth.uid())
+);
+create policy "Org members can update bookings" on bookings for update using (
+  organization_id in (select organization_id from profiles where profiles.id = auth.uid())
+);
+create policy "Org members can delete bookings" on bookings for delete using (
+  organization_id in (select organization_id from profiles where profiles.id = auth.uid())
+);
+
 -- User Settings (Private to User)
 drop policy if exists "Users can manage own settings" on user_settings;
 create policy "Users can manage own settings" on user_settings
@@ -281,7 +315,7 @@ create policy "Org members can manage documents" on generated_documents
 drop policy if exists "Public insert signups" on early_access_signups;
 create policy "Public insert signups" on early_access_signups for insert with check (true);
 
--- 13. AUTOMATIC ONBOARDING TRIGGER
+-- 14. AUTOMATIC ONBOARDING TRIGGER
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -322,7 +356,7 @@ create trigger on_auth_user_created
   for each row
   execute procedure public.handle_new_user();
 
--- 14. AUTO CREATE LEADS TRIGGER
+-- 15. AUTO CREATE LEAD FROM MESSAGE
 create or replace function public.auto_create_lead_from_message()
 returns trigger
 language plpgsql
@@ -365,7 +399,7 @@ create trigger on_message_received
   for each row
   execute procedure public.auto_create_lead_from_message();
 
--- 15. ENABLE REALTIME PUBLICATION
+-- 16. ENABLE REALTIME PUBLICATION
 -- Use DO block to safely check and add tables without errors
 do $$
 begin
@@ -378,7 +412,56 @@ begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'generated_documents') then
     alter publication supabase_realtime add table generated_documents;
   end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'bookings') then
+    alter publication supabase_realtime add table bookings;
+  end if;
 end $$;
+
+-- 17. SYNC BOOKINGS TO LEADS TRIGGER
+-- Automatically updates leads.next_appointment when a booking is created/modified
+create or replace function public.sync_latest_booking()
+returns trigger
+language plpgsql
+security definer
+as $$
+declare
+  next_appt timestamptz;
+  target_lead_id bigint;
+begin
+  -- Determine lead_id based on operation
+  if (TG_OP = 'DELETE') then
+    target_lead_id := OLD.lead_id;
+  else
+    target_lead_id := NEW.lead_id;
+  end if;
+
+  if target_lead_id is null then
+    return null;
+  end if;
+
+  -- Find the next upcoming scheduled booking for this lead
+  select start_time into next_appt
+  from bookings
+  where lead_id = target_lead_id
+    and status = 'scheduled'
+    and start_time > now()
+  order by start_time asc
+  limit 1;
+
+  -- Update the lead record
+  update leads
+  set next_appointment = next_appt
+  where id = target_lead_id;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists on_booking_change on bookings;
+create trigger on_booking_change
+  after insert or update or delete on bookings
+  for each row
+  execute procedure public.sync_latest_booking();
 `;
 
 const SupabaseSetup: React.FC = () => {

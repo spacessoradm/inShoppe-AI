@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 // --- Types ---
 interface CalendarEvent {
     id: string;
+    bookingId?: string; // Optional because follow-ups don't have booking ID
     leadId: number;
     title: string;
     date: Date;
@@ -27,31 +28,74 @@ interface CalendarEvent {
 }
 
 const CalendarPage: React.FC = () => {
-    const { user } = useAuth();
+    const { user, organization } = useAuth();
     const [currentDate, setCurrentDate] = useState(new Date());
     const [events, setEvents] = useState<CalendarEvent[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
 
     useEffect(() => {
-        if (user) {
+        if (user && organization) {
             fetchEvents();
         }
-    }, [user, currentDate]);
+    }, [user, organization, currentDate]);
 
     const fetchEvents = async () => {
-        if (!supabase || !user) return;
+        if (!supabase || !organization || !user) return;
         setLoading(true);
         try {
-            const { data, error } = await supabase
+            // 1. Fetch Confirmed Bookings from 'bookings' table
+            const { data: bookings, error: bookingsError } = await supabase
+                .from('bookings')
+                .select(`
+                    *,
+                    leads (
+                        id, name, phone, email, deal_value, ai_score, tags, status
+                    )
+                `)
+                .eq('organization_id', organization.id)
+                .neq('status', 'cancelled'); // Filter out cancelled
+
+            if (bookingsError) throw bookingsError;
+
+            // 2. Fetch Active Leads for Follow-up Suggestions
+            const { data: leads, error: leadsError } = await supabase
                 .from('leads')
                 .select('*')
-                .eq('user_id', user.id);
+                .eq('user_id', user.id)
+                .in('status', ['New', 'Qualified', 'Proposal']);
 
-            if (data) {
-                const loadedEvents: CalendarEvent[] = [];
-                
-                data.forEach((lead: Lead) => {
+            if (leadsError) throw leadsError;
+
+            const loadedEvents: CalendarEvent[] = [];
+
+            // Process Bookings
+            if (bookings) {
+                bookings.forEach((booking: any) => {
+                    if (booking.leads) {
+                        loadedEvents.push({
+                            id: `appt-${booking.id}`,
+                            bookingId: booking.id,
+                            leadId: booking.leads.id,
+                            title: booking.title || `Viewing: ${booking.leads.name}`,
+                            date: new Date(booking.start_time),
+                            type: 'appointment',
+                            description: booking.description || 'Scheduled viewing.',
+                            leadName: booking.leads.name,
+                            phone: booking.leads.phone || '',
+                            email: booking.leads.email,
+                            dealValue: booking.leads.deal_value,
+                            aiScore: booking.leads.ai_score,
+                            tags: booking.leads.tags,
+                            status: booking.status
+                        });
+                    }
+                });
+            }
+
+            // Process Follow-ups (AI Logic)
+            if (leads) {
+                leads.forEach((lead: Lead) => {
                     const commonProps = {
                         leadName: lead.name,
                         phone: lead.phone || '',
@@ -62,27 +106,12 @@ const CalendarPage: React.FC = () => {
                         status: lead.status
                     };
 
-                    // 1. Confirmed Appointments
-                    if (lead.next_appointment) {
-                        loadedEvents.push({
-                            id: `appt-${lead.id}`,
-                            leadId: lead.id,
-                            title: `Viewing: ${lead.name}`,
-                            date: new Date(lead.next_appointment),
-                            type: 'appointment',
-                            description: lead.ai_analysis || 'Scheduled viewing.',
-                            ...commonProps
-                        });
-                    }
-
-                    // 2. AI Follow-Up Logic
-                    // If lead is active but hasn't been contacted in > 3 days, suggest follow up
-                    if (['New', 'Qualified', 'Proposal'].includes(lead.status) && lead.last_contacted_at) {
+                    // Only suggest follow up if lead inactive > 3 days
+                    if (lead.last_contacted_at) {
                         const lastContact = new Date(lead.last_contacted_at);
                         const diffTime = Math.abs(new Date().getTime() - lastContact.getTime());
                         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
                         
-                        // Suggest follow up 3 days after last contact
                         if (diffDays >= 3) {
                             const followUpDate = new Date(lastContact);
                             followUpDate.setDate(lastContact.getDate() + 3);
@@ -90,6 +119,7 @@ const CalendarPage: React.FC = () => {
                             // If date is in past, move to today for visibility
                             const displayDate = followUpDate < new Date() ? new Date() : followUpDate;
 
+                            // Only add if not already has a booking today? (Simplification: just add it)
                             loadedEvents.push({
                                 id: `fu-${lead.id}`,
                                 leadId: lead.id,
@@ -102,35 +132,35 @@ const CalendarPage: React.FC = () => {
                         }
                     }
                 });
-                
-                setEvents(loadedEvents);
             }
+            
+            setEvents(loadedEvents);
+
         } catch (e) {
-            console.error(e);
+            console.error("Error fetching events:", e);
         } finally {
             setLoading(false);
         }
     };
 
     const handleCancelAppointment = async () => {
-        if (!selectedEvent || !supabase || !user) return;
+        if (!selectedEvent || !selectedEvent.bookingId || !supabase) return;
         
         try {
-            // Remove appointment from database
+            // Update booking status to 'cancelled'
+            // The DB Trigger will automatically remove/nullify the next_appointment in leads table if needed
             const { error } = await supabase
-                .from('leads')
-                .update({ 
-                    next_appointment: null,
-                    ai_analysis: 'Appointment cancelled manually via calendar.' 
-                })
-                .eq('id', selectedEvent.leadId);
+                .from('bookings')
+                .update({ status: 'cancelled' })
+                .eq('id', selectedEvent.bookingId);
 
             if (!error) {
-                // Update local state
+                // Remove locally
                 setEvents(prev => prev.filter(e => e.id !== selectedEvent.id));
                 setSelectedEvent(null);
             } else {
                 console.error("Failed to cancel appointment:", error);
+                alert("Failed to cancel. Please try again.");
             }
         } catch (e) {
             console.error("Error cancelling appointment:", e);

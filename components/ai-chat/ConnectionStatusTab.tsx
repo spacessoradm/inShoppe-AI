@@ -94,6 +94,7 @@ serve(async (req) => {
     const ai = new AIService(openai)
 
     // 3. Identify Merchant
+    // IMPORTANT: Returns { id, organization_id }
     const profile = await repo.getProfileByPhone(recipient)
     if (!profile) return new Response("Profile Not Found", { status: 404 })
 
@@ -107,7 +108,7 @@ serve(async (req) => {
 
     // 5. Gather Context
     const settings = await repo.getSettings(profile.id)
-    const schedule = await repo.getScheduleContext(profile.id)
+    const schedule = await repo.getScheduleContext(profile.organization_id) // Pass Org ID for shared schedule
     const knowledge = await repo.findKnowledge(body, openai)
     const history = await repo.getHistory(profile.id, sender)
 
@@ -124,11 +125,13 @@ serve(async (req) => {
 
     // Action: Schedule Viewing
     if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
-      const isConflict = await repo.checkSlotConflict(profile.id, lead.id, action.parameters.appointmentDate)
+      // Check conflict against the Organization's bookings
+      const isConflict = await repo.checkSlotConflict(profile.organization_id, action.parameters.appointmentDate)
       if (isConflict) {
-        finalReply = "I apologize, but that time slot is taken. Can we try another time?"
+        finalReply = "I apologize, but that time slot is already taken. Can we try another time?"
       } else {
-        await repo.bookAppointment(lead.id, action.parameters.appointmentDate)
+        // Book the appointment in bookings table
+        await repo.bookAppointment(profile.organization_id, lead.id, action.parameters.appointmentDate, profile.id)
       }
     }
 
@@ -212,7 +215,8 @@ export class Repository {
   constructor(private sb: SupabaseClient) {}
 
   async getProfileByPhone(phone: string) {
-    const { data } = await this.sb.from("profiles").select("id").eq("twilio_phone_number", phone).single()
+    // Also fetch organization_id
+    const { data } = await this.sb.from("profiles").select("id, organization_id").eq("twilio_phone_number", phone).single()
     return data
   }
 
@@ -221,17 +225,20 @@ export class Repository {
     return data
   }
 
-  async getScheduleContext(userId: string) {
+  // Updated: Get Schedule from 'bookings' table
+  async getScheduleContext(orgId: string) {
     const now = new Date().toISOString()
-    const { data } = await this.sb.from("leads")
-      .select("next_appointment")
-      .eq("user_id", userId)
-      .gt("next_appointment", now)
-      .order("next_appointment", { ascending: true })
+    // Fetch upcoming bookings for the whole organization
+    const { data } = await this.sb.from("bookings")
+      .select("start_time, end_time")
+      .eq("organization_id", orgId)
+      .eq("status", "scheduled")
+      .gt("start_time", now)
+      .order("start_time", { ascending: true })
       .limit(10)
     
     if (!data || data.length === 0) return "No upcoming appointments."
-    return data.map((s: any) => "- " + new Date(s.next_appointment).toLocaleString() + " (Busy)").join("\\n")
+    return data.map((s: any) => "- " + new Date(s.start_time).toLocaleString() + " to " + new Date(s.end_time).toLocaleTimeString() + " (Busy)").join("\\n")
   }
 
   async getHistory(userId: string, phone: string) {
@@ -258,22 +265,39 @@ export class Repository {
     return lead
   }
 
-  async checkSlotConflict(userId: string, leadId: number, dateStr: string) {
-    const start = new Date(dateStr)
-    const end = new Date(start.getTime() + 60 * 60 * 1000) // 1 hour
-    const { data } = await this.sb.from("leads")
+  // Updated: Check conflict in 'bookings'
+  async checkSlotConflict(orgId: string, dateStr: string) {
+    const requestedStart = new Date(dateStr)
+    const requestedEnd = new Date(requestedStart.getTime() + 60 * 60 * 1000) // Assume 1 hour slot
+
+    // Check for overlap: existing_start < requested_end AND existing_end > requested_start
+    const { data } = await this.sb.from("bookings")
       .select("id")
-      .eq("user_id", userId)
-      .neq("id", leadId)
-      .gte("next_appointment", start.toISOString())
-      .lt("next_appointment", end.toISOString())
+      .eq("organization_id", orgId)
+      .eq("status", "scheduled")
+      .lt("start_time", requestedEnd.toISOString())
+      .gt("end_time", requestedStart.toISOString())
       .maybeSingle()
     return !!data
   }
 
-  async bookAppointment(leadId: number, dateStr: string) {
+  // Updated: Create a 'booking' record
+  async bookAppointment(orgId: string, leadId: number, dateStr: string, createdBy: string) {
+    const startTime = new Date(dateStr)
+    const endTime = new Date(startTime.getTime() + 60 * 60 * 1000)
+
+    await this.sb.from("bookings").insert({
+      organization_id: orgId,
+      lead_id: leadId,
+      created_by: createdBy,
+      title: "Viewing Appointment",
+      start_time: startTime.toISOString(),
+      end_time: endTime.toISOString(),
+      status: "scheduled"
+    })
+    
+    // Also update lead status to Proposal (optional, trigger handles date sync)
     await this.sb.from("leads").update({
-      next_appointment: dateStr,
       status: "Proposal",
       ai_analysis: "Viewing Scheduled"
     }).eq("id", leadId)
@@ -330,7 +354,7 @@ CONTEXT:
 Today: \${new Date().toLocaleString()}
 \${context ? "KNOWLEDGE BASE:\\n" + context : ""}
 
-AVAILABILITY:
+AVAILABILITY (Current Bookings):
 \${schedule}
 
 OUTPUT JSON ONLY:
