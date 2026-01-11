@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
@@ -55,32 +55,109 @@ serve(async (req) => {
 })
 `;
 
-// --- EDGE FUNCTION CODE SNIPPET (SERVER-SIDE AI WORKER) ---
-const EDGE_FUNCTION_CODE = `
-/**
- * INSHOPPE AI - MODULAR WHATSAPP WORKER
- * 
- * Architecture:
- * 1. Utils: Helpers for parsing and formatting.
- * 2. Repository: Handles all Supabase DB interactions.
- * 3. AIService: Handles OpenAI and Prompt Construction.
- * 4. Main: Orchestrates the flow.
- */
-
+// --- MODULAR WORKER FILES ---
+const WORKER_FILES = {
+  'index.ts': `
+// index.ts - Main Entry Point
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import OpenAI from "https://esm.sh/openai@4.28.0"
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   1. UTILITIES & CONFIG
-   ───────────────────────────────────────────────────────────────────────────── */
-const CONFIG = {
+import { CONFIG, UTILS } from './utils.ts'
+import { Repository } from './repository.ts'
+import { AIService } from './ai.ts'
+
+serve(async (req) => {
+  const corsHeaders = { "Access-Control-Allow-Origin": "*" }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+
+  try {
+    // 1. Parse Request
+    let body = "", sender = "", recipient = ""
+    const contentType = req.headers.get("content-type") || ""
+    
+    if (contentType.includes("form-urlencoded")) {
+      const text = await req.text(); const p = new URLSearchParams(text)
+      body = p.get("Body") || ""; sender = p.get("From") || ""; recipient = p.get("To") || ""
+    } else {
+      const fd = await req.formData();
+      body = fd.get("Body")?.toString() || ""; sender = fd.get("From")?.toString() || ""; recipient = fd.get("To")?.toString() || ""
+    }
+    
+    sender = sender.replace("whatsapp:", ""); recipient = recipient.replace("whatsapp:", "")
+    if (!body) return new Response("OK")
+
+    // 2. Init Services
+    const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY)
+    const openai = new OpenAI({ apiKey: CONFIG.OPENAI_KEY })
+    const repo = new Repository(sb)
+    const ai = new AIService(openai)
+
+    // 3. Identify Merchant
+    const profile = await repo.getProfileByPhone(recipient)
+    if (!profile) return new Response("Profile Not Found", { status: 404 })
+
+    // 4. Fast Path: Greeting (No AI Cost)
+    if (UTILS.isGreeting(body)) {
+      const reply = UTILS.getGreetingReply(UTILS.detectLang(body))
+      await repo.logMessage(profile.id, sender, body, 'inbound', 'Greeting')
+      await repo.logMessage(profile.id, sender, reply, 'outbound', 'GreetingReply')
+      return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(reply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
+    }
+
+    // 5. Gather Context
+    const settings = await repo.getSettings(profile.id)
+    const schedule = await repo.getScheduleContext(profile.id)
+    const knowledge = await repo.findKnowledge(body, openai)
+    const history = await repo.getHistory(profile.id, sender)
+
+    // 6. AI Thinking
+    const systemPrompt = ai.buildSystemPrompt(settings?.system_instruction, knowledge, schedule)
+    const messages = [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: body }]
+    
+    const aiResponse = await ai.think(settings?.model, messages)
+    let finalReply = aiResponse.reply
+    const action = aiResponse.action
+
+    // 7. Action Execution
+    const lead = await repo.findOrCreateLead(profile.id, sender)
+
+    // Action: Schedule Viewing
+    if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
+      const isConflict = await repo.checkSlotConflict(profile.id, lead.id, action.parameters.appointmentDate)
+      if (isConflict) {
+        finalReply = "I apologize, but that time slot is taken. Can we try another time?"
+      } else {
+        await repo.bookAppointment(lead.id, action.parameters.appointmentDate)
+      }
+    }
+
+    // Action: Tag Interest
+    if (action?.parameters?.propertyInterest) {
+      await repo.addTag(lead.id, lead.tags, action.parameters.propertyInterest)
+    }
+
+    // 8. Save & Reply
+    await repo.logMessage(profile.id, sender, body, 'inbound', aiResponse.intent)
+    await repo.logMessage(profile.id, sender, finalReply, 'outbound')
+
+    return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(finalReply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
+
+  } catch (err: any) {
+    console.error("Worker Error:", err)
+    return new Response("Error", { status: 500 })
+  }
+})`,
+  'utils.ts': `
+// utils.ts - Configuration and Helper Functions
+
+export const CONFIG = {
   SUPABASE_URL: Deno.env.get("SUPABASE_URL") ?? "",
   SUPABASE_KEY: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
   OPENAI_KEY: Deno.env.get("OPENAI_API_KEY") ?? "",
 }
 
-const RESPONSE_SCHEMA = {
+export const RESPONSE_SCHEMA = {
   intent: "string",
   reply: "string",
   action: {
@@ -93,7 +170,7 @@ const RESPONSE_SCHEMA = {
   }
 }
 
-const UTILS = {
+export const UTILS = {
   safeParseJSON: (raw: string) => {
     const cleaned = raw.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim()
     try {
@@ -125,12 +202,13 @@ const UTILS = {
     };
     return map[lang] || map.en;
   }
-}
+}`,
+  'repository.ts': `
+// repository.ts - Database Interactions
+import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2"
+import OpenAI from "https://esm.sh/openai@4.28.0"
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   2. REPOSITORY LAYER (Database Interactions)
-   ───────────────────────────────────────────────────────────────────────────── */
-class Repository {
+export class Repository {
   constructor(private sb: SupabaseClient) {}
 
   async getProfileByPhone(phone: string) {
@@ -230,12 +308,13 @@ class Repository {
       return data?.map((c: any) => c.content).join("\\n\\n") || ""
     } catch { return "" }
   }
-}
+}`,
+  'ai.ts': `
+// ai.ts - AI Prompting Logic
+import OpenAI from "https://esm.sh/openai@4.28.0"
+import { RESPONSE_SCHEMA, UTILS } from './utils.ts'
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   3. AI SERVICE LAYER (Prompting & Intelligence)
-   ───────────────────────────────────────────────────────────────────────────── */
-class AIService {
+export class AIService {
   constructor(private openai: OpenAI) {}
 
   buildSystemPrompt(instruction: string, context: string, schedule: string) {
@@ -268,93 +347,8 @@ OUTPUT JSON ONLY:
     })
     return UTILS.safeParseJSON(completion.choices[0].message.content || "{}")
   }
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   4. MAIN CONTROLLER
-   ───────────────────────────────────────────────────────────────────────────── */
-serve(async (req) => {
-  const corsHeaders = { "Access-Control-Allow-Origin": "*" }
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
-
-  try {
-    // 1. Parse Request
-    let body = "", sender = "", recipient = ""
-    const contentType = req.headers.get("content-type") || ""
-    
-    if (contentType.includes("form-urlencoded")) {
-      const text = await req.text(); const p = new URLSearchParams(text)
-      body = p.get("Body") || ""; sender = p.get("From") || ""; recipient = p.get("To") || ""
-    } else {
-      const fd = await req.formData();
-      body = fd.get("Body")?.toString() || ""; sender = fd.get("From")?.toString() || ""; recipient = fd.get("To")?.toString() || ""
-    }
-    
-    sender = sender.replace("whatsapp:", ""); recipient = recipient.replace("whatsapp:", "")
-    if (!body) return new Response("OK")
-
-    // 2. Init Services
-    const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY)
-    const openai = new OpenAI({ apiKey: CONFIG.OPENAI_KEY })
-    const repo = new Repository(sb)
-    const ai = new AIService(openai)
-
-    // 3. Identify Merchant
-    const profile = await repo.getProfileByPhone(recipient)
-    if (!profile) return new Response("Profile Not Found", { status: 404 })
-
-    // 4. Fast Path: Greeting (No AI Cost)
-    if (UTILS.isGreeting(body)) {
-      const reply = UTILS.getGreetingReply(UTILS.detectLang(body))
-      await repo.logMessage(profile.id, sender, body, 'inbound', 'Greeting')
-      await repo.logMessage(profile.id, sender, reply, 'outbound', 'GreetingReply')
-      return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(reply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
-    }
-
-    // 5. Gather Context
-    const settings = await repo.getSettings(profile.id)
-    const schedule = await repo.getScheduleContext(profile.id)
-    const knowledge = await repo.findKnowledge(body, openai)
-    const history = await repo.getHistory(profile.id, sender)
-
-    // 6. AI Thinking
-    const systemPrompt = ai.buildSystemPrompt(settings?.system_instruction, knowledge, schedule)
-    const messages = [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: body }]
-    
-    const aiResponse = await ai.think(settings?.model, messages)
-    let finalReply = aiResponse.reply
-    const action = aiResponse.action
-
-    // 7. Action Execution
-    const lead = await repo.findOrCreateLead(profile.id, sender)
-
-    // Action: Schedule Viewing
-    if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
-      const isConflict = await repo.checkSlotConflict(profile.id, lead.id, action.parameters.appointmentDate)
-      if (isConflict) {
-        finalReply = "I apologize, but that time slot is taken. Can we try another time?"
-      } else {
-        await repo.bookAppointment(lead.id, action.parameters.appointmentDate)
-      }
-    }
-
-    // Action: Tag Interest
-    if (action?.parameters?.propertyInterest) {
-      await repo.addTag(lead.id, lead.tags, action.parameters.propertyInterest)
-    }
-
-    // 8. Save & Reply
-    await repo.logMessage(profile.id, sender, body, 'inbound', aiResponse.intent)
-    await repo.logMessage(profile.id, sender, finalReply, 'outbound')
-
-    return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(finalReply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
-
-  } catch (err: any) {
-    console.error("Worker Error:", err)
-    return new Response("Error", { status: 500 })
-  }
-})
-`;
+}`
+};
 
 // --- OPENAI PROXY CODE SNIPPET (ROBUST VERSION) ---
 const OPENAI_PROXY_CODE = `
@@ -462,6 +456,8 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
     checkWebhookReachability,
     webhookStatus
 }) => {
+    const [selectedFile, setSelectedFile] = useState<keyof typeof WORKER_FILES>('index.ts');
+
     return (
         <div className="flex-1 overflow-y-auto p-6 m-0 h-full scrollbar-thin scrollbar-thumb-slate-200">
             <div className="max-w-3xl mx-auto space-y-6">
@@ -527,11 +523,46 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
-                        <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px] shadow-inner"><pre>{EDGE_FUNCTION_CODE}</pre></div>
-                        <Button size="sm" className="mt-2 bg-amber-600 hover:bg-amber-500 text-white" onClick={() => navigator.clipboard.writeText(EDGE_FUNCTION_CODE)}>Copy Worker Code</Button>
+                        {/* File Selector Tabs */}
+                        <div className="flex gap-2 mb-3 overflow-x-auto">
+                            {Object.keys(WORKER_FILES).map((fileName) => (
+                                <button
+                                    key={fileName}
+                                    onClick={() => setSelectedFile(fileName as keyof typeof WORKER_FILES)}
+                                    className={cn(
+                                        "px-3 py-1.5 text-xs font-mono rounded-full border transition-colors",
+                                        selectedFile === fileName 
+                                            ? "bg-amber-600 text-white border-amber-600" 
+                                            : "bg-white text-slate-600 border-slate-200 hover:bg-amber-50"
+                                    )}
+                                >
+                                    {fileName}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-yellow-300 font-mono border border-slate-800 max-h-[300px] shadow-inner">
+                            <pre>{WORKER_FILES[selectedFile]}</pre>
+                        </div>
+                        
+                        <Button 
+                            size="sm" 
+                            className="mt-2 bg-amber-600 hover:bg-amber-500 text-white" 
+                            onClick={() => navigator.clipboard.writeText(WORKER_FILES[selectedFile])}
+                        >
+                            Copy {selectedFile}
+                        </Button>
+                        
                         <div className="mt-2 text-xs text-slate-500">
-                            1. Deploy as <code>dynamic-endpoint</code> or <code>whatsapp-webhook</code>.<br/>
-                            2. Set <code>OPENAI_API_KEY</code>, <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code> in Secrets.
+                            <strong>Instructions:</strong>
+                            <br/>
+                            1. Create a folder (e.g., <code>supabase/functions/whatsapp-webhook/</code>).
+                            <br/>
+                            2. Create these 4 files inside that folder and paste the code respectively.
+                            <br/>
+                            3. Deploy: <code>supabase functions deploy whatsapp-webhook --no-verify-jwt</code>.
+                            <br/>
+                            4. Set secrets: <code>OPENAI_API_KEY</code>, <code>SUPABASE_URL</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>.
                         </div>
                     </CardContent>
                 </Card>
