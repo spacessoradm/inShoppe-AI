@@ -57,243 +57,301 @@ serve(async (req) => {
 
 // --- EDGE FUNCTION CODE SNIPPET (SERVER-SIDE AI WORKER) ---
 const EDGE_FUNCTION_CODE = `
+/**
+ * INSHOPPE AI - MODULAR WHATSAPP WORKER
+ * 
+ * Architecture:
+ * 1. Utils: Helpers for parsing and formatting.
+ * 2. Repository: Handles all Supabase DB interactions.
+ * 3. AIService: Handles OpenAI and Prompt Construction.
+ * 4. Main: Orchestrates the flow.
+ */
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2"
 import OpenAI from "https://esm.sh/openai@4.28.0"
 
-/* ───────────────────────────── */
-/* ENV */
-/* ───────────────────────────── */
-const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? ""
-const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-const openAiKey = Deno.env.get("OPENAI_API_KEY") ?? ""
+/* ─────────────────────────────────────────────────────────────────────────────
+   1. UTILITIES & CONFIG
+   ───────────────────────────────────────────────────────────────────────────── */
+const CONFIG = {
+  SUPABASE_URL: Deno.env.get("SUPABASE_URL") ?? "",
+  SUPABASE_KEY: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+  OPENAI_KEY: Deno.env.get("OPENAI_API_KEY") ?? "",
+}
 
-/* ───────────────────────────── */
-/* CONFIG */
-/* ───────────────────────────── */
-const RESPONSE_FORMAT_JSON = {
+const RESPONSE_SCHEMA = {
   intent: "string",
   reply: "string",
   action: {
-    type: "SCHEDULE_VIEWING | PROPERTY_INQUIRY | NONE",
+    type: "SCHEDULE_VIEWING | ASK_SCHEDULE | PROPERTY_INQUIRY | NONE",
     reason: "string | null",
     parameters: {
-      appointmentDate: "ISO8601 string (e.g. 2024-01-01T10:00:00Z) | null",
+      appointmentDate: "ISO8601 string | null",
       propertyInterest: "string | null"
     }
   }
 }
 
-/* ───────────────────────────── */
-/* UTILITIES */
-/* ───────────────────────────── */
-function safeParseAIJson(raw: string) {
-  const cleaned = raw.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim()
-  try {
-    return JSON.parse(cleaned)
-  } catch {
+const UTILS = {
+  safeParseJSON: (raw: string) => {
+    const cleaned = raw.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim()
     try {
-      const start = cleaned.indexOf("{")
-      const end = cleaned.lastIndexOf("}")
-      if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1))
-    } catch {}
-    return {
-      intent: "General Chat",
-      reply: cleaned,
-      action: { type: "NONE" }
+      return JSON.parse(cleaned)
+    } catch {
+      try {
+        const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}")
+        if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1))
+      } catch {}
+      return { intent: "General", reply: cleaned, action: { type: "NONE" } }
     }
+  },
+  xmlEscape: (str: string) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+  detectLang: (text: string) => {
+    const t = text.toLowerCase();
+    if (/[你好嗨早安]/.test(t)) return "zh";
+    if (t.includes("hai") || t.includes("halo") || t.includes("selamat")) return "ms";
+    return "en";
+  },
+  isGreeting: (text: string) => {
+    const t = text.trim().toLowerCase();
+    return ["hi","hello","hey","good morning","hai","halo","你好"].some(g => t.startsWith(g));
+  },
+  getGreetingReply: (lang: string) => {
+    const map: any = {
+      en: "Hello! 😊 Are you looking for any property today?",
+      zh: "你好 😊 请问你有在找房产吗？",
+      ms: "Hai! 😊 Anda sedang mencari hartanah?"
+    };
+    return map[lang] || map.en;
   }
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms = 15_000): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("Timeout")), ms))
-  ])
-}
+/* ─────────────────────────────────────────────────────────────────────────────
+   2. REPOSITORY LAYER (Database Interactions)
+   ───────────────────────────────────────────────────────────────────────────── */
+class Repository {
+  constructor(private sb: SupabaseClient) {}
 
-/* ───────────────────────────── */
-/* SERVER */
-/* ───────────────────────────── */
-serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", {
-      headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" }
+  async getProfileByPhone(phone: string) {
+    const { data } = await this.sb.from("profiles").select("id").eq("twilio_phone_number", phone).single()
+    return data
+  }
+
+  async getSettings(userId: string) {
+    const { data } = await this.sb.from("user_settings").select("system_instruction, model").eq("user_id", userId).single()
+    return data
+  }
+
+  async getScheduleContext(userId: string) {
+    const now = new Date().toISOString()
+    const { data } = await this.sb.from("leads")
+      .select("next_appointment")
+      .eq("user_id", userId)
+      .gt("next_appointment", now)
+      .order("next_appointment", { ascending: true })
+      .limit(10)
+    
+    if (!data || data.length === 0) return "No upcoming appointments."
+    return data.map((s: any) => "- " + new Date(s.next_appointment).toLocaleString() + " (Busy)").join("\\n")
+  }
+
+  async getHistory(userId: string, phone: string) {
+    const { data } = await this.sb.from("messages")
+      .select("text, sender")
+      .eq("user_id", userId)
+      .eq("phone", phone)
+      .order("created_at", { ascending: false })
+      .limit(8)
+    return (data || []).reverse().map((m: any) => ({
+      role: m.sender === "user" ? "user" : "assistant",
+      content: m.text
+    }))
+  }
+
+  async findOrCreateLead(userId: string, phone: string) {
+    let { data: lead } = await this.sb.from("leads").select("id, tags").eq("user_id", userId).eq("phone", phone).maybeSingle()
+    if (!lead) {
+      const { data: newLead } = await this.sb.from("leads")
+        .insert({ user_id: userId, phone, name: "Lead " + phone, status: "New" })
+        .select().single()
+      lead = newLead
+    }
+    return lead
+  }
+
+  async checkSlotConflict(userId: string, leadId: number, dateStr: string) {
+    const start = new Date(dateStr)
+    const end = new Date(start.getTime() + 60 * 60 * 1000) // 1 hour
+    const { data } = await this.sb.from("leads")
+      .select("id")
+      .eq("user_id", userId)
+      .neq("id", leadId)
+      .gte("next_appointment", start.toISOString())
+      .lt("next_appointment", end.toISOString())
+      .maybeSingle()
+    return !!data
+  }
+
+  async bookAppointment(leadId: number, dateStr: string) {
+    await this.sb.from("leads").update({
+      next_appointment: dateStr,
+      status: "Proposal",
+      ai_analysis: "Viewing Scheduled"
+    }).eq("id", leadId)
+  }
+
+  async addTag(leadId: number, currentTags: string[] | null, newTag: string) {
+    const tags = currentTags || []
+    if (!tags.includes(newTag)) {
+      await this.sb.from("leads").update({ tags: [...tags, newTag] }).eq("id", leadId)
+    }
+  }
+
+  async logMessage(userId: string, phone: string, text: string, type: 'inbound'|'outbound', tag?: string) {
+    await this.sb.from("messages").insert({
+      user_id: userId,
+      phone,
+      sender: type === 'inbound' ? 'user' : 'bot',
+      direction: type,
+      text,
+      intent_tag: tag
     })
   }
 
-  try {
-    const formData = await req.formData()
-    const incomingMsg = formData.get("Body")?.toString() || ""
-    let senderPhone = formData.get("From")?.toString() || ""
-    let merchantPhone = formData.get("To")?.toString() || ""
-
-    senderPhone = senderPhone.replace(/^whatsapp:/, "")
-    merchantPhone = merchantPhone.replace(/^whatsapp:/, "")
-
-    if (!incomingMsg) return new Response("OK")
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-    const openai = new OpenAI({ apiKey: openAiKey })
-
-    /* 1. GET MERCHANT PROFILE */
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("twilio_phone_number", merchantPhone)
-      .single()
-
-    if (!profile) return new Response("Profile not found", { status: 404 })
-
-    /* 2. GET SETTINGS & SCHEDULE */
-    const { data: settings } = await supabase
-      .from("user_settings")
-      .select("system_instruction, model")
-      .eq("user_id", profile.id)
-      .single()
-
-    // Fetch busy slots (Future appointments)
-    const now = new Date()
-    const { data: busySlots } = await supabase
-      .from("leads")
-      .select("next_appointment")
-      .eq("user_id", profile.id)
-      .gt("next_appointment", now.toISOString())
-      .order("next_appointment", { ascending: true })
-      .limit(10)
-
-    const scheduleContext = busySlots?.map((s: any) => 
-      "- " + new Date(s.next_appointment).toLocaleString("en-US", { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + " (Busy)"
-    ).join("\\n") || "No upcoming appointments."
-
-    /* 3. RAG RETRIEVAL */
-    let knowledgeContext = ""
+  async findKnowledge(query: string, openai: OpenAI) {
     try {
-      const embeddingResp = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: incomingMsg
-      })
-      const { data: chunks } = await supabase.rpc("match_knowledge", {
-        query_embedding: embeddingResp.data[0].embedding,
+      const emb = await openai.embeddings.create({ model: "text-embedding-3-small", input: query })
+      const { data } = await this.sb.rpc("match_knowledge", {
+        query_embedding: emb.data[0].embedding,
         match_threshold: 0.5,
         match_count: 3
       })
-      if (chunks?.length) knowledgeContext = chunks.map((c: any) => c.content).join("\\n\\n")
-    } catch (e) { console.error("RAG Error", e) }
+      return data?.map((c: any) => c.content).join("\\n\\n") || ""
+    } catch { return "" }
+  }
+}
 
-    /* 4. BUILD PROMPT */
-    const systemPrompt = \`
-\${settings?.system_instruction || "You are a helpful real estate assistant."}
+/* ─────────────────────────────────────────────────────────────────────────────
+   3. AI SERVICE LAYER (Prompting & Intelligence)
+   ───────────────────────────────────────────────────────────────────────────── */
+class AIService {
+  constructor(private openai: OpenAI) {}
+
+  buildSystemPrompt(instruction: string, context: string, schedule: string) {
+    return \`
+\${instruction || "You are a helpful real estate assistant."}
+
+CRITICAL RULES:
+1. Inventory: Assume units are available unless explicitly stated "sold out". Use "subject to confirmation".
+2. Pricing: If multiple prices exist, give range. Never say "price unknown" if data exists.
+3. Proactive: If user shows interest, ask: "Would you like to schedule a viewing?" (Action: ASK_SCHEDULE).
 
 CONTEXT:
-Today is \${now.toLocaleString()}.
-\${knowledgeContext ? "Use this knowledge: " + knowledgeContext : ""}
+Today: \${new Date().toLocaleString()}
+\${context ? "KNOWLEDGE BASE:\\n" + context : ""}
 
-AVAILABILITY (You MUST check this):
-\${scheduleContext}
+AVAILABILITY:
+\${schedule}
 
-INSTRUCTIONS:
-1. If the user asks for property recommendations, provide them based on knowledge.
-2. If the user wants to book a viewing, CHECK the Availability above.
-   - If slot is busy, decline politely.
-   - If slot is free, confirm the booking in your reply.
-3. Respond in VALID JSON format.
-
-JSON STRUCTURE:
-\${JSON.stringify(RESPONSE_FORMAT_JSON)}
+OUTPUT JSON ONLY:
+\${JSON.stringify(RESPONSE_SCHEMA)}
 \`
+  }
 
-    /* 5. FETCH HISTORY */
-    const { data: history } = await supabase
-      .from("messages")
-      .select("text, sender")
-      .eq("user_id", profile.id)
-      .eq("phone", senderPhone)
-      .order("created_at", { ascending: false })
-      .limit(8)
-
-    const messages = [
-      { role: "system", content: systemPrompt },
-      ...(history || []).reverse().map((m: any) => ({
-        role: m.sender === "user" ? "user" : "assistant",
-        content: m.text
-      })),
-      { role: "user", content: incomingMsg }
-    ]
-
-    /* 6. CALL AI */
-    const completion = await withTimeout(openai.chat.completions.create({
-      model: settings?.model || "gpt-4o-mini",
-      messages: messages as any,
+  async think(model: string, messages: any[]) {
+    const completion = await this.openai.chat.completions.create({
+      model: model || "gpt-4o-mini",
+      messages: messages,
       temperature: 0.3,
       response_format: { type: "json_object" }
-    }))
+    })
+    return UTILS.safeParseJSON(completion.choices[0].message.content || "{}")
+  }
+}
 
-    const rawContent = completion.choices[0].message.content || ""
-    const aiResponse = safeParseAIJson(rawContent)
-    let finalReply = aiResponse.reply
+/* ─────────────────────────────────────────────────────────────────────────────
+   4. MAIN CONTROLLER
+   ───────────────────────────────────────────────────────────────────────────── */
+serve(async (req) => {
+  const corsHeaders = { "Access-Control-Allow-Origin": "*" }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
 
-    /* 7. HANDLE ACTIONS (DB UPDATES) */
-    const action = aiResponse.action
+  try {
+    // 1. Parse Request
+    let body = "", sender = "", recipient = ""
+    const contentType = req.headers.get("content-type") || ""
     
-    // CRM: Create Lead if not exists
-    let { data: lead } = await supabase.from('leads').select('id, tags').eq('user_id', profile.id).eq('phone', senderPhone).maybeSingle()
-    if (!lead) {
-       const { data: newLead } = await supabase.from('leads').insert({
-           user_id: profile.id, phone: senderPhone, name: "Lead " + senderPhone, status: 'New'
-       }).select().single()
-       lead = newLead
+    if (contentType.includes("form-urlencoded")) {
+      const text = await req.text(); const p = new URLSearchParams(text)
+      body = p.get("Body") || ""; sender = p.get("From") || ""; recipient = p.get("To") || ""
+    } else {
+      const fd = await req.formData();
+      body = fd.get("Body")?.toString() || ""; sender = fd.get("From")?.toString() || ""; recipient = fd.get("To")?.toString() || ""
+    }
+    
+    sender = sender.replace("whatsapp:", ""); recipient = recipient.replace("whatsapp:", "")
+    if (!body) return new Response("OK")
+
+    // 2. Init Services
+    const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY)
+    const openai = new OpenAI({ apiKey: CONFIG.OPENAI_KEY })
+    const repo = new Repository(sb)
+    const ai = new AIService(openai)
+
+    // 3. Identify Merchant
+    const profile = await repo.getProfileByPhone(recipient)
+    if (!profile) return new Response("Profile Not Found", { status: 404 })
+
+    // 4. Fast Path: Greeting (No AI Cost)
+    if (UTILS.isGreeting(body)) {
+      const reply = UTILS.getGreetingReply(UTILS.detectLang(body))
+      await repo.logMessage(profile.id, sender, body, 'inbound', 'Greeting')
+      await repo.logMessage(profile.id, sender, reply, 'outbound', 'GreetingReply')
+      return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(reply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
     }
 
-    // CRM: Booking Logic
-    if (action?.type === 'SCHEDULE_VIEWING' && action.parameters?.appointmentDate) {
-        const apptDate = new Date(action.parameters.appointmentDate)
-        
-        // Final Double Check (Concurrency)
-        const { data: conflict } = await supabase.from('leads')
-            .select('id')
-            .eq('user_id', profile.id)
-            .neq('id', lead.id) // ignore self
-            .gte('next_appointment', apptDate.toISOString())
-            .lt('next_appointment', new Date(apptDate.getTime() + 60*60*1000).toISOString()) // 1hr slot
-            .maybeSingle()
+    // 5. Gather Context
+    const settings = await repo.getSettings(profile.id)
+    const schedule = await repo.getScheduleContext(profile.id)
+    const knowledge = await repo.findKnowledge(body, openai)
+    const history = await repo.getHistory(profile.id, sender)
 
-        if (conflict) {
-            finalReply = "I apologize, but that slot was just taken. Could we try another time?"
-        } else {
-            await supabase.from('leads').update({
-                next_appointment: apptDate.toISOString(),
-                status: 'Proposal',
-                ai_analysis: 'Booking Confirmed via WhatsApp'
-            }).eq('id', lead.id)
-        }
+    // 6. AI Thinking
+    const systemPrompt = ai.buildSystemPrompt(settings?.system_instruction, knowledge, schedule)
+    const messages = [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: body }]
+    
+    const aiResponse = await ai.think(settings?.model, messages)
+    let finalReply = aiResponse.reply
+    const action = aiResponse.action
+
+    // 7. Action Execution
+    const lead = await repo.findOrCreateLead(profile.id, sender)
+
+    // Action: Schedule Viewing
+    if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
+      const isConflict = await repo.checkSlotConflict(profile.id, lead.id, action.parameters.appointmentDate)
+      if (isConflict) {
+        finalReply = "I apologize, but that time slot is taken. Can we try another time?"
+      } else {
+        await repo.bookAppointment(lead.id, action.parameters.appointmentDate)
+      }
     }
 
-    // CRM: Interest Tagging
-    if (action?.parameters?.propertyInterest && lead) {
-        const currentTags = lead.tags || []
-        if (!currentTags.includes(action.parameters.propertyInterest)) {
-            await supabase.from('leads').update({
-                tags: [...currentTags, action.parameters.propertyInterest]
-            }).eq('id', lead.id)
-        }
+    // Action: Tag Interest
+    if (action?.parameters?.propertyInterest) {
+      await repo.addTag(lead.id, lead.tags, action.parameters.propertyInterest)
     }
 
-    /* 8. SAVE LOGS */
-    await supabase.from("messages").insert([
-      { user_id: profile.id, phone: senderPhone, sender: "user", direction: "inbound", text: incomingMsg, intent_tag: aiResponse.intent },
-      { user_id: profile.id, phone: senderPhone, sender: "bot", direction: "outbound", text: finalReply }
-    ])
+    // 8. Save & Reply
+    await repo.logMessage(profile.id, sender, body, 'inbound', aiResponse.intent)
+    await repo.logMessage(profile.id, sender, finalReply, 'outbound')
 
-    /* 9. RETURN TWIML */
-    return new Response(
-      \`<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>\${finalReply}</Body></Message></Response>\`,
-      { headers: { "Content-Type": "text/xml; charset=utf-8" } }
-    )
+    return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(finalReply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
 
   } catch (err: any) {
-    console.error("Edge Function Error:", err)
-    return new Response("Error", { status: 400 })
+    console.error("Worker Error:", err)
+    return new Response("Error", { status: 500 })
   }
 })
 `;
