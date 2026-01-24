@@ -9,7 +9,7 @@ interface TabsContextType {
 const TabsContext = createContext<TabsContextType | undefined>(undefined);
 
 interface TabsProps extends React.HTMLAttributes<HTMLDivElement> {
-    children: React.ReactNode;
+    children?: React.ReactNode;
     defaultValue: string;
     orientation?: 'horizontal' | 'vertical';
     className?: string;

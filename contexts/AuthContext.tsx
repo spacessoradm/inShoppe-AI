@@ -116,7 +116,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUser(currentUser);
             
             if (currentUser) {
-                // If we don't have profile/org yet, fetch them
+                // Check if profile is already loaded to avoid redundant calls
+                // But force reload if organization is missing to fix "missing plan" issues
                 if (!profile || !organization) {
                     await loadProfileAndOrg(currentUser.id, currentUser.email);
                 }
@@ -144,12 +145,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!supabase) return;
 
     try {
+      console.log("Loading profile for user:", userId);
       // 1. Fetch Profile
       let profileData = null;
       let retries = 0;
       
       while (!profileData && retries < 6) {
-          const { data } = await supabase
+          const { data, error } = await supabase
               .from('profiles')
               .select('*')
               .eq('id', userId)
@@ -158,6 +160,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (data) {
               profileData = data;
           } else {
+              console.log(`Profile not found (attempt ${retries + 1}). Retrying...`);
               retries++;
               await new Promise(r => setTimeout(r, 500)); 
           }
@@ -188,6 +191,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   
                   if (newProfile && !profileError) {
                       profileData = newProfile;
+                      // Create settings immediately
                       await supabase.from('user_settings').insert({ user_id: userId });
                   }
               }
@@ -200,36 +204,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfile(profileData);
           
           // 2. Fetch Organization
-          let orgData = null;
-          let orgRetries = 0;
-          
-          while (!orgData && orgRetries < 3) {
-              const { data } = await supabase
+          if (profileData.organization_id) {
+              const { data: orgData } = await supabase
                   .from('organizations')
                   .select('*')
                   .eq('id', profileData.organization_id)
                   .maybeSingle();
               
-              if (data) {
-                  orgData = data;
+              if (orgData) {
+                  setOrganization(orgData);
               } else {
-                  orgRetries++;
-                  await new Promise(r => setTimeout(r, 500));
+                  console.error("Organization missing for profile:", profileData.id);
               }
           }
-          if (orgData) setOrganization(orgData);
 
-          // 3. Fetch User Settings (NEW)
-          const { data: settingsData } = await supabase
+          // 3. Fetch User Settings (NEW) - With Self Repair
+          let { data: settingsData } = await supabase
               .from('user_settings')
               .select('*')
               .eq('user_id', userId)
               .maybeSingle();
           
+          if (!settingsData) {
+              console.warn("User Settings missing. Creating default settings...");
+              const { data: newSettings, error: settingsError } = await supabase
+                  .from('user_settings')
+                  .insert({ user_id: userId })
+                  .select()
+                  .single();
+              
+              if (!settingsError && newSettings) {
+                  settingsData = newSettings;
+              }
+          }
+          
           if (settingsData) {
               setSettings(settingsData);
           }
-      } 
+      } else {
+          console.error("Failed to load or create profile for user:", userId);
+      }
     } catch (e) {
       console.error("Error loading profile/org/settings:", e);
     }
