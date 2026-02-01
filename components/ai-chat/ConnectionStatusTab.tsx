@@ -58,7 +58,7 @@ serve(async (req) => {
 // --- MODULAR WORKER FILES ---
 const WORKER_FILES = {
   'index.ts': `
-// index.ts - Main Entry Point
+// index.ts - Main Entry Point (Sales Engine Orchestrator)
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import OpenAI from "https://esm.sh/openai@4.28.0"
@@ -93,54 +93,71 @@ serve(async (req) => {
     const repo = new Repository(sb)
     const ai = new AIService(openai)
 
-    // 3. Identify Merchant
-    // IMPORTANT: Returns { id, organization_id }
+    // 3. Identify Merchant & Organization (Security Root)
     const profile = await repo.getProfileByPhone(recipient)
     if (!profile) return new Response("Profile Not Found", { status: 404 })
+    const orgId = profile.organization_id
 
-    // 4. Fast Path: Greeting (No AI Cost)
+    // 4. Fast Path: Greeting (Low Latency Check)
     if (UTILS.isGreeting(body)) {
       const reply = UTILS.getGreetingReply(UTILS.detectLang(body))
       await repo.logMessage(profile.id, sender, body, 'inbound', 'Greeting')
+      await repo.findOrCreateLead(profile.id, sender) // Ensure lead exists
       await repo.logMessage(profile.id, sender, reply, 'outbound', 'GreetingReply')
       return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(reply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
     }
 
-    // 5. Gather Context
+    // 5. Gather Context (Secure & Stateful)
     const settings = await repo.getSettings(profile.id)
-    const schedule = await repo.getScheduleContext(profile.organization_id) // Pass Org ID for shared schedule
-    const knowledge = await repo.findKnowledge(body, openai)
+    const schedule = await repo.getScheduleContext(orgId) // Scoped to Org
+    const knowledge = await repo.findKnowledge(body, openai, orgId) // Scoped to Org
     const history = await repo.getHistory(profile.id, sender)
+    
+    // 6. Memory Retrieval
+    const lead = await repo.findOrCreateLead(profile.id, sender)
 
-    // 6. AI Thinking
-    const systemPrompt = ai.buildSystemPrompt(settings?.system_instruction, knowledge, schedule)
+    // 7. AI Thinking (Sales Engine)
+    const systemPrompt = ai.buildSystemPrompt(settings?.system_instruction, knowledge, schedule, lead)
     const messages = [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: body }]
     
     const aiResponse = await ai.think(settings?.model, messages)
-    let finalReply = aiResponse.reply
+    let finalReply = aiResponse.reply || "I'm checking on that for you."
     const action = aiResponse.action
 
-    // 7. Action Execution
-    const lead = await repo.findOrCreateLead(profile.id, sender)
-
-    // Action: Schedule Viewing
-    if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
-      // Check conflict against the Organization's bookings
-      const isConflict = await repo.checkSlotConflict(profile.organization_id, action.parameters.appointmentDate)
-      if (isConflict) {
-        finalReply = "I apologize, but that time slot is already taken. Can we try another time?"
-      } else {
-        // Book the appointment in bookings table
-        await repo.bookAppointment(profile.organization_id, lead.id, action.parameters.appointmentDate, profile.id)
-      }
+    // 8. Lead Update (Memory Persistence)
+    if (aiResponse.lead_update) {
+        const updates: any = {}
+        if (aiResponse.lead_update.name) updates.name = aiResponse.lead_update.name
+        
+        // Update analysis metadata
+        const analysis = {
+            budget: aiResponse.lead_update.budget,
+            preferences: aiResponse.lead_update.preferences,
+            urgency: aiResponse.lead_update.urgency,
+            last_thought: aiResponse.thought_process
+        }
+        updates.ai_analysis = JSON.stringify(analysis)
+        await repo.updateLead(lead.id, updates)
     }
 
-    // Action: Tag Interest
+    // 9. Action Execution
+    if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
+      const isConflict = await repo.checkSlotConflict(orgId, action.parameters.appointmentDate)
+      if (isConflict) {
+        // AI should have checked logic, but double check here.
+        finalReply = "I just double-checked and that slot is actually taken. Would one of the other times I mentioned work?"
+      } else {
+        await repo.bookAppointment(orgId, lead.id, action.parameters.appointmentDate, profile.id)
+      }
+    } else if (action?.type === "HANDOVER") {
+        await repo.addTag(lead.id, lead.tags, "Agent Alert")
+    }
+
     if (action?.parameters?.propertyInterest) {
       await repo.addTag(lead.id, lead.tags, action.parameters.propertyInterest)
     }
 
-    // 8. Save & Reply
+    // 10. Save & Reply
     await repo.logMessage(profile.id, sender, body, 'inbound', aiResponse.intent)
     await repo.logMessage(profile.id, sender, finalReply, 'outbound')
 
@@ -148,7 +165,8 @@ serve(async (req) => {
 
   } catch (err: any) {
     console.error("Worker Error:", err)
-    return new Response("Error", { status: 500 })
+    // Return a valid XML even on error to prevent WhatsApp retries flooding
+    return new Response(\`<?xml version="1.0"?><Response><Message><Body>System is currently busy. Please try again later.</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
   }
 })`,
   'utils.ts': `
@@ -158,18 +176,26 @@ export const CONFIG = {
   SUPABASE_URL: Deno.env.get("SUPABASE_URL") ?? "",
   SUPABASE_KEY: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
   OPENAI_KEY: Deno.env.get("OPENAI_API_KEY") ?? "",
+  TIMEZONE: "Asia/Kuala_Lumpur"
 }
 
 export const RESPONSE_SCHEMA = {
   intent: "string",
+  thought_process: "string", 
   reply: "string",
   action: {
-    type: "SCHEDULE_VIEWING | ASK_SCHEDULE | PROPERTY_INQUIRY | NONE",
+    type: "SCHEDULE_VIEWING | ASK_SCHEDULE | PROPERTY_INQUIRY | HANDOVER | NONE",
     reason: "string | null",
     parameters: {
       appointmentDate: "ISO8601 string | null",
       propertyInterest: "string | null"
     }
+  },
+  lead_update: {
+    name: "string | null",
+    budget: "string | null",
+    preferences: "string | null",
+    urgency: "string | null"
   }
 }
 
@@ -183,28 +209,35 @@ export const UTILS = {
         const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}")
         if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1))
       } catch {}
-      return { intent: "General", reply: cleaned, action: { type: "NONE" } }
+      // Fallback
+      return { 
+        intent: "General", 
+        thought_process: "Parse Failed",
+        reply: cleaned || "I am having trouble processing that request.", 
+        action: { type: "NONE" } 
+      }
     }
   },
   xmlEscape: (str: string) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
   detectLang: (text: string) => {
     const t = text.toLowerCase();
     if (/[你好嗨早安]/.test(t)) return "zh";
-    if (t.includes("hai") || t.includes("halo") || t.includes("selamat")) return "ms";
+    if (t.includes("hai") || t.includes("halo") || t.includes("selamat") || t.includes("nak tanya")) return "ms";
     return "en";
   },
   isGreeting: (text: string) => {
     const t = text.trim().toLowerCase();
-    return ["hi","hello","hey","good morning","hai","halo","你好"].some(g => t.startsWith(g));
+    return ["hi","hello","hey","good morning","hai","halo","你好"].some(g => t.startsWith(g)) && t.length < 20;
   },
   getGreetingReply: (lang: string) => {
     const map: any = {
-      en: "Hello! 😊 Are you looking for any property today?",
-      zh: "你好 😊 请问你有在找房产吗？",
-      ms: "Hai! 😊 Anda sedang mencari hartanah?"
+      en: "Hello! 👋 Welcome to InShoppe Realty. Are you looking for a new property or need help with a listing today?",
+      zh: "你好! 👋 欢迎来到 InShoppe Realty。请问您今天是在找新房产还是需要关于房源的协助？",
+      ms: "Hai! 👋 Selamat datang ke InShoppe Realty. Anda sedang mencari hartanah baru atau perlukan bantuan?"
     };
     return map[lang] || map.en;
-  }
+  },
+  getCurrentTime: () => new Date().toLocaleString("en-US", { timeZone: CONFIG.TIMEZONE })
 }`,
   'repository.ts': `
 // repository.ts - Database Interactions
@@ -215,7 +248,6 @@ export class Repository {
   constructor(private sb: SupabaseClient) {}
 
   async getProfileByPhone(phone: string) {
-    // Also fetch organization_id
     const { data } = await this.sb.from("profiles").select("id, organization_id").eq("twilio_phone_number", phone).single()
     return data
   }
@@ -225,10 +257,8 @@ export class Repository {
     return data
   }
 
-  // Updated: Get Schedule from 'bookings' table
   async getScheduleContext(orgId: string) {
     const now = new Date().toISOString()
-    // Fetch upcoming bookings for the whole organization
     const { data } = await this.sb.from("bookings")
       .select("start_time, end_time")
       .eq("organization_id", orgId)
@@ -237,7 +267,7 @@ export class Repository {
       .order("start_time", { ascending: true })
       .limit(10)
     
-    if (!data || data.length === 0) return "No upcoming appointments."
+    if (!data || data.length === 0) return "Schedule is open."
     return data.map((s: any) => "- " + new Date(s.start_time).toLocaleString() + " to " + new Date(s.end_time).toLocaleTimeString() + " (Busy)").join("\\n")
   }
 
@@ -247,7 +277,7 @@ export class Repository {
       .eq("user_id", userId)
       .eq("phone", phone)
       .order("created_at", { ascending: false })
-      .limit(8)
+      .limit(10)
     return (data || []).reverse().map((m: any) => ({
       role: m.sender === "user" ? "user" : "assistant",
       content: m.text
@@ -255,7 +285,7 @@ export class Repository {
   }
 
   async findOrCreateLead(userId: string, phone: string) {
-    let { data: lead } = await this.sb.from("leads").select("id, tags").eq("user_id", userId).eq("phone", phone).maybeSingle()
+    let { data: lead } = await this.sb.from("leads").select("*").eq("user_id", userId).eq("phone", phone).maybeSingle()
     if (!lead) {
       const { data: newLead } = await this.sb.from("leads")
         .insert({ user_id: userId, phone, name: "Lead " + phone, status: "New" })
@@ -265,12 +295,13 @@ export class Repository {
     return lead
   }
 
-  // Updated: Check conflict in 'bookings'
+  async updateLead(id: number, updates: any) {
+      await this.sb.from("leads").update(updates).eq("id", id)
+  }
+
   async checkSlotConflict(orgId: string, dateStr: string) {
     const requestedStart = new Date(dateStr)
-    const requestedEnd = new Date(requestedStart.getTime() + 60 * 60 * 1000) // Assume 1 hour slot
-
-    // Check for overlap: existing_start < requested_end AND existing_end > requested_start
+    const requestedEnd = new Date(requestedStart.getTime() + 60 * 60 * 1000) 
     const { data } = await this.sb.from("bookings")
       .select("id")
       .eq("organization_id", orgId)
@@ -281,7 +312,6 @@ export class Repository {
     return !!data
   }
 
-  // Updated: Create a 'booking' record
   async bookAppointment(orgId: string, leadId: number, dateStr: string, createdBy: string) {
     const startTime = new Date(dateStr)
     const endTime = new Date(startTime.getTime() + 60 * 60 * 1000)
@@ -296,10 +326,9 @@ export class Repository {
       status: "scheduled"
     })
     
-    // Also update lead status to Proposal (optional, trigger handles date sync)
     await this.sb.from("leads").update({
       status: "Proposal",
-      ai_analysis: "Viewing Scheduled"
+      next_appointment: startTime.toISOString()
     }).eq("id", leadId)
   }
 
@@ -321,15 +350,27 @@ export class Repository {
     })
   }
 
-  async findKnowledge(query: string, openai: OpenAI) {
+  // Security: Filter knowledge to orgId
+  async findKnowledge(query: string, openai: OpenAI, orgId: string) {
     try {
       const emb = await openai.embeddings.create({ model: "text-embedding-3-small", input: query })
-      const { data } = await this.sb.rpc("match_knowledge", {
+      
+      const { data: matches } = await this.sb.rpc("match_knowledge", {
         query_embedding: emb.data[0].embedding,
         match_threshold: 0.5,
-        match_count: 3
+        match_count: 5 
       })
-      return data?.map((c: any) => c.content).join("\\n\\n") || ""
+      
+      if (!matches || matches.length === 0) return ""
+
+      // Double-check ownership
+      const matchIds = matches.map((m: any) => m.id)
+      const { data: validDocs } = await this.sb.from("knowledge")
+        .select("id, content")
+        .eq("organization_id", orgId)
+        .in("id", matchIds)
+      
+      return validDocs?.map((c: any) => c.content).join("\\n\\n") || ""
     } catch { return "" }
   }
 }`,
@@ -341,23 +382,41 @@ import { RESPONSE_SCHEMA, UTILS } from './utils.ts'
 export class AIService {
   constructor(private openai: OpenAI) {}
 
-  buildSystemPrompt(instruction: string, context: string, schedule: string) {
+  buildSystemPrompt(instruction: string, context: string, schedule: string, leadProfile: any) {
+    const leadContext = leadProfile ? \`
+KNOWN CUSTOMER PROFILE:
+- Name: \${leadProfile.name || "Unknown"}
+- Metadata: \${JSON.stringify(leadProfile.ai_analysis || {})}
+- Previous Interactions: \${leadProfile.last_contacted_at ? "Active recently" : "New lead"}
+\` : "CUSTOMER: New Lead (Unknown)";
+
     return \`
-\${instruction || "You are a helpful real estate assistant."}
+ROLE:
+\${instruction || "You are a top-tier Real Estate Sales Agent for InShoppe AI."}
+
+OBJECTIVE:
+Your goal is not just to answer, but to CLOSE THE DEAL.
+Adopt a "Consultative Sales" approach. Be professional, warm, and localized (Malaysian/Singaporean context allowed if detected).
 
 CRITICAL RULES:
-1. Inventory: Assume units are available unless explicitly stated "sold out". Use "subject to confirmation".
-2. Pricing: If multiple prices exist, give range. Never say "price unknown" if data exists.
-3. Proactive: If user shows interest, ask: "Would you like to schedule a viewing?" (Action: ASK_SCHEDULE).
+1. **Inventory**: Use "subject to confirmation" for availability. Never say "I don't know" if Knowledge Base has info.
+2. **Pricing**: Provide ranges if exact price is missing.
+3. **Closing**: Always end with a Call to Action (CTA). E.g., "Shall I arrange a viewing?" or "Would you like the floor plan?".
+4. **Conflict Handling**: If scheduling fails, suggest 2-3 ALTERNATIVE slots from the Schedule provided.
+5. **Tone**: Professional, polite, concise. Use emojis sparingly.
 
 CONTEXT:
-Today: \${new Date().toLocaleString()}
-\${context ? "KNOWLEDGE BASE:\\n" + context : ""}
+Time: \${UTILS.getCurrentTime()}
+\${leadContext}
+
+KNOWLEDGE BASE (Organization Specific):
+\${context || "No specific documents found."}
 
 AVAILABILITY (Current Bookings):
 \${schedule}
 
-OUTPUT JSON ONLY:
+OUTPUT FORMAT:
+Return strictly JSON matching this schema:
 \${JSON.stringify(RESPONSE_SCHEMA)}
 \`
   }
