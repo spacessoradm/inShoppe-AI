@@ -58,7 +58,7 @@ serve(async (req) => {
 // --- MODULAR WORKER FILES ---
 const WORKER_FILES = {
   'index.ts': `
-// index.ts - Main Entry Point (Sales Engine Orchestrator)
+// index.ts - The Sales Engine Orchestrator
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import OpenAI from "https://esm.sh/openai@4.28.0"
@@ -68,11 +68,11 @@ import { Repository } from './repository.ts'
 import { AIService } from './ai.ts'
 
 serve(async (req) => {
-  const corsHeaders = { "Access-Control-Allow-Origin": "*" }
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+  // 1. Handle CORS (for testing from dashboard)
+  if (req.method === "OPTIONS") return new Response("ok", { headers: { "Access-Control-Allow-Origin": "*" } })
 
   try {
-    // 1. Parse Request
+    // 2. Parse Incoming Webhook (Twilio Format)
     let body = "", sender = "", recipient = ""
     const contentType = req.headers.get("content-type") || ""
     
@@ -84,93 +84,96 @@ serve(async (req) => {
       body = fd.get("Body")?.toString() || ""; sender = fd.get("From")?.toString() || ""; recipient = fd.get("To")?.toString() || ""
     }
     
+    // Clean phone numbers (remove whatsapp: prefix)
     sender = sender.replace("whatsapp:", ""); recipient = recipient.replace("whatsapp:", "")
-    if (!body) return new Response("OK")
+    
+    if (!body) return new Response("OK - No Body")
 
-    // 2. Init Services
+    // 3. Init Services
     const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY)
     const openai = new OpenAI({ apiKey: CONFIG.OPENAI_KEY })
     const repo = new Repository(sb)
     const ai = new AIService(openai)
 
-    // 3. Identify Merchant & Organization (Security Root)
+    // 4. SECURITY & CONTEXT: Identify Organization
+    // We look up the Profile associated with the receiving Twilio Number
     const profile = await repo.getProfileByPhone(recipient)
-    if (!profile) return new Response("Profile Not Found", { status: 404 })
+    if (!profile) {
+      console.error(\`Profile not found for recipient: \${recipient}\`)
+      return new Response("Profile Not Found", { status: 404 })
+    }
     const orgId = profile.organization_id
 
-    // 4. Fast Path: Greeting (Low Latency Check)
-    if (UTILS.isGreeting(body)) {
-      const reply = UTILS.getGreetingReply(UTILS.detectLang(body))
-      await repo.logMessage(profile.id, sender, body, 'inbound', 'Greeting')
-      await repo.findOrCreateLead(profile.id, sender) // Ensure lead exists
-      await repo.logMessage(profile.id, sender, reply, 'outbound', 'GreetingReply')
-      return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(reply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
-    }
-
-    // 5. Gather Context (Secure & Stateful)
-    const settings = await repo.getSettings(profile.id)
-    const schedule = await repo.getScheduleContext(orgId) // Scoped to Org
-    const knowledge = await repo.findKnowledge(body, openai, orgId) // Scoped to Org
-    const history = await repo.getHistory(profile.id, sender)
-    
-    // 6. Memory Retrieval
+    // 5. MEMORY: Identify Lead
     const lead = await repo.findOrCreateLead(profile.id, sender)
 
-    // 7. AI Thinking (Sales Engine)
+    // 6. FAST PATH: Greeting Check (Latency Optimization)
+    if (UTILS.isGreeting(body)) {
+      const lang = UTILS.detectLang(body)
+      const reply = UTILS.getGreetingReply(lang)
+      // Async logging to not block reply
+      repo.logMessage(profile.id, sender, body, 'inbound', 'Greeting')
+      repo.logMessage(profile.id, sender, reply, 'outbound', 'GreetingReply')
+      return new Response(UTILS.createTwiml(reply), { headers: { "Content-Type": "text/xml" } })
+    }
+
+    // 7. GATHER CONTEXT (RAG + Schedule + History)
+    const settings = await repo.getSettings(profile.id)
+    const schedule = await repo.getScheduleContext(orgId) // Scoped to Org
+    const knowledge = await repo.findKnowledge(body, openai, orgId) // Scoped to Org (Security Critical)
+    const history = await repo.getHistory(profile.id, sender)
+
+    // 8. AI REASONING (Sales Engine)
     const systemPrompt = ai.buildSystemPrompt(settings?.system_instruction, knowledge, schedule, lead)
     const messages = [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: body }]
     
+    // "Thinking" Step
     const aiResponse = await ai.think(settings?.model, messages)
     let finalReply = aiResponse.reply || "I'm checking on that for you."
     const action = aiResponse.action
 
-    // 8. Lead Update (Memory Persistence)
+    // 9. EXECUTE: Memory Update (Persona Extraction)
     if (aiResponse.lead_update) {
-        const updates: any = {}
-        if (aiResponse.lead_update.name) updates.name = aiResponse.lead_update.name
-        
-        // Update analysis metadata
-        const analysis = {
-            budget: aiResponse.lead_update.budget,
-            preferences: aiResponse.lead_update.preferences,
-            urgency: aiResponse.lead_update.urgency,
-            last_thought: aiResponse.thought_process
-        }
-        updates.ai_analysis = JSON.stringify(analysis)
-        await repo.updateLead(lead.id, updates)
+        // AI found new details (Budget, Preferences, etc). Save to DB.
+        await repo.updateLead(lead.id, aiResponse.lead_update, aiResponse.thought_process)
     }
 
-    // 9. Action Execution
+    // 10. EXECUTE: Business Actions
     if (action?.type === "SCHEDULE_VIEWING" && action.parameters?.appointmentDate) {
+      // Double check availability logic
       const isConflict = await repo.checkSlotConflict(orgId, action.parameters.appointmentDate)
+      
       if (isConflict) {
-        // AI should have checked logic, but double check here.
-        finalReply = "I just double-checked and that slot is actually taken. Would one of the other times I mentioned work?"
+        finalReply = "I just double-checked the system and that slot was just taken. Based on the schedule, would you prefer a different time?" 
+        // Note: The AI Prompt should have already suggested alts, but this is a fail-safe.
       } else {
         await repo.bookAppointment(orgId, lead.id, action.parameters.appointmentDate, profile.id)
+        // finalReply remains as AI generated (usually "Booked for...")
       }
     } else if (action?.type === "HANDOVER") {
         await repo.addTag(lead.id, lead.tags, "Agent Alert")
+        // Logic to notify human agent could go here
     }
 
     if (action?.parameters?.propertyInterest) {
       await repo.addTag(lead.id, lead.tags, action.parameters.propertyInterest)
     }
 
-    // 10. Save & Reply
+    // 11. LOGGING & RESPONSE
     await repo.logMessage(profile.id, sender, body, 'inbound', aiResponse.intent)
-    await repo.logMessage(profile.id, sender, finalReply, 'outbound')
+    await repo.logMessage(profile.id, sender, finalReply, 'outbound', action?.type)
 
-    return new Response(\`<?xml version="1.0"?><Response><Message><Body>\${UTILS.xmlEscape(finalReply)}</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
+    return new Response(UTILS.createTwiml(finalReply), { headers: { "Content-Type": "text/xml" } })
 
   } catch (err: any) {
-    console.error("Worker Error:", err)
-    // Return a valid XML even on error to prevent WhatsApp retries flooding
-    return new Response(\`<?xml version="1.0"?><Response><Message><Body>System is currently busy. Please try again later.</Body></Message></Response>\`, { headers: { "Content-Type": "text/xml" } })
+    console.error("Worker Critical Error:", err)
+    // Fail Gracefully to user
+    const errorReply = "I'm having a bit of trouble connecting to the schedule right now. Please try again in a moment."
+    return new Response(UTILS.createTwiml(errorReply), { headers: { "Content-Type": "text/xml" } })
   }
 })`,
   'utils.ts': `
-// utils.ts - Configuration and Helper Functions
+// utils.ts - Configuration and Robust Helpers
 
 export const CONFIG = {
   SUPABASE_URL: Deno.env.get("SUPABASE_URL") ?? "",
@@ -184,7 +187,7 @@ export const RESPONSE_SCHEMA = {
   thought_process: "string", 
   reply: "string",
   action: {
-    type: "SCHEDULE_VIEWING | ASK_SCHEDULE | PROPERTY_INQUIRY | HANDOVER | NONE",
+    type: "SCHEDULE_VIEWING | ASK_SCHEDULE | QUALIFY_LEAD | HANDOVER | NONE",
     reason: "string | null",
     parameters: {
       appointmentDate: "ISO8601 string | null",
@@ -194,53 +197,65 @@ export const RESPONSE_SCHEMA = {
   lead_update: {
     name: "string | null",
     budget: "string | null",
-    preferences: "string | null",
+    location_preference: "string | null",
     urgency: "string | null"
   }
 }
 
 export const UTILS = {
+  // Robust JSON parser that handles code blocks and partial strings
   safeParseJSON: (raw: string) => {
+    if (!raw) return { reply: "...", action: { type: "NONE" } };
     const cleaned = raw.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim()
     try {
       return JSON.parse(cleaned)
     } catch {
       try {
+        // Try to find the first '{' and last '}'
         const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}")
         if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1))
       } catch {}
-      // Fallback
+      // Fallback object to prevent crash
       return { 
-        intent: "General", 
-        thought_process: "Parse Failed",
-        reply: cleaned || "I am having trouble processing that request.", 
+        intent: "Error", 
+        thought_process: "JSON Parse Failed",
+        reply: cleaned, // Use the raw text if it looks like a reply
         action: { type: "NONE" } 
       }
     }
   },
-  xmlEscape: (str: string) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+  
+  createTwiml: (message: string) => {
+    const escaped = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return \`<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>\${escaped}</Body></Message></Response>\`;
+  },
+
   detectLang: (text: string) => {
     const t = text.toLowerCase();
     if (/[你好嗨早安]/.test(t)) return "zh";
-    if (t.includes("hai") || t.includes("halo") || t.includes("selamat") || t.includes("nak tanya")) return "ms";
+    if (t.includes("hai") || t.includes("halo") || t.includes("selamat") || t.includes("nak tanya") || t.includes("pm")) return "ms";
     return "en";
   },
+
   isGreeting: (text: string) => {
     const t = text.trim().toLowerCase();
-    return ["hi","hello","hey","good morning","hai","halo","你好"].some(g => t.startsWith(g)) && t.length < 20;
+    const greetings = ["hi","hello","hey","good morning","hai","halo","你好","pm"];
+    return greetings.some(g => t === g) || (greetings.some(g => t.startsWith(g + " ")) && t.length < 15);
   },
+
   getGreetingReply: (lang: string) => {
     const map: any = {
-      en: "Hello! 👋 Welcome to InShoppe Realty. Are you looking for a new property or need help with a listing today?",
-      zh: "你好! 👋 欢迎来到 InShoppe Realty。请问您今天是在找新房产还是需要关于房源的协助？",
-      ms: "Hai! 👋 Selamat datang ke InShoppe Realty. Anda sedang mencari hartanah baru atau perlukan bantuan?"
+      en: "Hello! 👋 Welcome to InShoppe Realty. Are you looking to buy, rent, or sell a property today?",
+      zh: "你好! 👋 欢迎来到 InShoppe Realty。请问您今天有兴趣买房，租房，还是出售房产？",
+      ms: "Hai! 👋 Selamat datang ke InShoppe Realty. Anda berminat untuk beli, sewa, atau jual hartanah hari ini?"
     };
     return map[lang] || map.en;
   },
-  getCurrentTime: () => new Date().toLocaleString("en-US", { timeZone: CONFIG.TIMEZONE })
+
+  getCurrentTime: () => new Date().toLocaleString("en-US", { timeZone: CONFIG.TIMEZONE, hour12: true })
 }`,
   'repository.ts': `
-// repository.ts - Database Interactions
+// repository.ts - Database Interactions & Security
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2"
 import OpenAI from "https://esm.sh/openai@4.28.0"
 
@@ -257,6 +272,7 @@ export class Repository {
     return data
   }
 
+  // Fetch only upcoming bookings for the specific Organization
   async getScheduleContext(orgId: string) {
     const now = new Date().toISOString()
     const { data } = await this.sb.from("bookings")
@@ -265,10 +281,10 @@ export class Repository {
       .eq("status", "scheduled")
       .gt("start_time", now)
       .order("start_time", { ascending: true })
-      .limit(10)
+      .limit(15)
     
-    if (!data || data.length === 0) return "Schedule is open."
-    return data.map((s: any) => "- " + new Date(s.start_time).toLocaleString() + " to " + new Date(s.end_time).toLocaleTimeString() + " (Busy)").join("\\n")
+    if (!data || data.length === 0) return "Schedule is completely open for the next 7 days."
+    return data.map((s: any) => "- BUSY: " + new Date(s.start_time).toLocaleString() + " to " + new Date(s.end_time).toLocaleTimeString()).join("\\n")
   }
 
   async getHistory(userId: string, phone: string) {
@@ -277,7 +293,7 @@ export class Repository {
       .eq("user_id", userId)
       .eq("phone", phone)
       .order("created_at", { ascending: false })
-      .limit(10)
+      .limit(10) // Context window
     return (data || []).reverse().map((m: any) => ({
       role: m.sender === "user" ? "user" : "assistant",
       content: m.text
@@ -295,13 +311,27 @@ export class Repository {
     return lead
   }
 
-  async updateLead(id: number, updates: any) {
-      await this.sb.from("leads").update(updates).eq("id", id)
+  // Store extracted persona into JSONB or fields
+  async updateLead(id: number, updates: any, thought?: string) {
+      const cleanUpdates: any = {}
+      if (updates.name) cleanUpdates.name = updates.name
+      
+      // We assume the table has an 'ai_analysis' text or JSONB column
+      // Ideally we merge this, but for now we overwrite with latest valid data
+      const metadata = {
+          budget: updates.budget,
+          preference: updates.location_preference,
+          urgency: updates.urgency,
+          last_thought: thought
+      }
+      cleanUpdates.ai_analysis = JSON.stringify(metadata)
+      
+      await this.sb.from("leads").update(cleanUpdates).eq("id", id)
   }
 
   async checkSlotConflict(orgId: string, dateStr: string) {
     const requestedStart = new Date(dateStr)
-    const requestedEnd = new Date(requestedStart.getTime() + 60 * 60 * 1000) 
+    const requestedEnd = new Date(requestedStart.getTime() + 60 * 60 * 1000) // 1 Hour slots
     const { data } = await this.sb.from("bookings")
       .select("id")
       .eq("organization_id", orgId)
@@ -350,11 +380,12 @@ export class Repository {
     })
   }
 
-  // Security: Filter knowledge to orgId
+  // SECURITY: Filter knowledge to orgId only
   async findKnowledge(query: string, openai: OpenAI, orgId: string) {
     try {
       const emb = await openai.embeddings.create({ model: "text-embedding-3-small", input: query })
       
+      // RPC returns potential matches based on vector similarity
       const { data: matches } = await this.sb.rpc("match_knowledge", {
         query_embedding: emb.data[0].embedding,
         match_threshold: 0.5,
@@ -363,56 +394,65 @@ export class Repository {
       
       if (!matches || matches.length === 0) return ""
 
-      // Double-check ownership
+      // CRITICAL: Filter these matches against the organization_id to prevent data leaks.
+      // Even if RLS is off for service role, we must manually enforce tenancy here.
       const matchIds = matches.map((m: any) => m.id)
       const { data: validDocs } = await this.sb.from("knowledge")
         .select("id, content")
-        .eq("organization_id", orgId)
+        .eq("organization_id", orgId) // <-- Security Filter
         .in("id", matchIds)
       
       return validDocs?.map((c: any) => c.content).join("\\n\\n") || ""
-    } catch { return "" }
+    } catch (e) { 
+        console.error("RAG Error", e)
+        return "" 
+    }
   }
 }`,
   'ai.ts': `
-// ai.ts - AI Prompting Logic
+// ai.ts - AI Brain & Prompt Engineering
 import OpenAI from "https://esm.sh/openai@4.28.0"
 import { RESPONSE_SCHEMA, UTILS } from './utils.ts'
 
 export class AIService {
   constructor(private openai: OpenAI) {}
 
-  buildSystemPrompt(instruction: string, context: string, schedule: string, leadProfile: any) {
-    const leadContext = leadProfile ? \`
-KNOWN CUSTOMER PROFILE:
-- Name: \${leadProfile.name || "Unknown"}
-- Metadata: \${JSON.stringify(leadProfile.ai_analysis || {})}
-- Previous Interactions: \${leadProfile.last_contacted_at ? "Active recently" : "New lead"}
-\` : "CUSTOMER: New Lead (Unknown)";
+  buildSystemPrompt(instruction: string, context: string, schedule: string, lead: any) {
+    // 1. Memory Injection
+    const leadMeta = lead.ai_analysis ? JSON.parse(lead.ai_analysis) : {};
+    const leadContext = \`
+KNOWN CUSTOMER MEMORY:
+- Name: \${lead.name || "Unknown"}
+- Budget: \${leadMeta.budget || "Unknown"}
+- Preferences: \${leadMeta.preference || "Unknown"}
+- Urgency: \${leadMeta.urgency || "Unknown"}
+\`;
 
+    // 2. The Core Prompt
     return \`
 ROLE:
 \${instruction || "You are a top-tier Real Estate Sales Agent for InShoppe AI."}
 
 OBJECTIVE:
-Your goal is not just to answer, but to CLOSE THE DEAL.
-Adopt a "Consultative Sales" approach. Be professional, warm, and localized (Malaysian/Singaporean context allowed if detected).
+Your goal is to **CLOSE THE DEAL** (Booking a viewing or getting a deposit).
+Adopt a "Consultative Sales" approach. Be professional, warm, and use localized English (Malaysia/Singapore style).
 
 CRITICAL RULES:
-1. **Inventory**: Use "subject to confirmation" for availability. Never say "I don't know" if Knowledge Base has info.
-2. **Pricing**: Provide ranges if exact price is missing.
-3. **Closing**: Always end with a Call to Action (CTA). E.g., "Shall I arrange a viewing?" or "Would you like the floor plan?".
-4. **Conflict Handling**: If scheduling fails, suggest 2-3 ALTERNATIVE slots from the Schedule provided.
-5. **Tone**: Professional, polite, concise. Use emojis sparingly.
+1. **Fact-Check**: Use the KNOWLEDGE BASE. If info is missing, say "I'll check with my team".
+2. **Sales Logic**:
+   - If user says "Too expensive", search KNOWLEDGE BASE for cheaper units.
+   - If user wants to book, propose a time.
+   - **Conflict Handling**: Look at [AVAILABILITY]. If the user asks for a slot listed as BUSY, say "That time is taken, but how about [Suggest 2 Alternatives]?"
+3. **Extraction**: Always try to extract Lead details (Name, Budget) into the JSON output.
 
 CONTEXT:
-Time: \${UTILS.getCurrentTime()}
+Current Time (KL): \${UTILS.getCurrentTime()}
 \${leadContext}
 
 KNOWLEDGE BASE (Organization Specific):
 \${context || "No specific documents found."}
 
-AVAILABILITY (Current Bookings):
+AVAILABILITY (Busy Slots):
 \${schedule}
 
 OUTPUT FORMAT:
@@ -425,7 +465,7 @@ Return strictly JSON matching this schema:
     const completion = await this.openai.chat.completions.create({
       model: model || "gpt-4o-mini",
       messages: messages,
-      temperature: 0.3,
+      temperature: 0.3, // Lower temp for factual adherence
       response_format: { type: "json_object" }
     })
     return UTILS.safeParseJSON(completion.choices[0].message.content || "{}")
