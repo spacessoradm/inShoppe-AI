@@ -98,6 +98,7 @@ create table if not exists leads (
   created_at timestamptz default now(),
   ai_score int default 0,
   ai_analysis text,
+  metadata jsonb default '{}'::jsonb, -- NEW: Structured Memory
   next_appointment timestamptz -- NEW: For Booking Schedule
 );
 
@@ -112,6 +113,9 @@ begin
   end if;
   if not exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'next_appointment') then
     alter table leads add column next_appointment timestamptz;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'metadata') then
+    alter table leads add column metadata jsonb default '{}'::jsonb;
   end if;
 end $$;
 
@@ -146,8 +150,17 @@ create table if not exists user_settings (
   twilio_phone_number text,
   webhook_url text,
   system_instruction text,
+  model text,
   updated_at timestamptz default now()
 );
+
+-- SAFETY: Add model column to user_settings if missing
+do $$
+begin
+  if not exists (select 1 from information_schema.columns where table_name = 'user_settings' and column_name = 'model') then
+    alter table user_settings add column model text;
+  end if;
+end $$;
 
 -- 9. DOCUMENT AUTOMATION ENGINE TABLES
 create table if not exists document_templates (

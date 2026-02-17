@@ -134,7 +134,7 @@ serve(async (req) => {
 
     // 9. EXECUTE: Memory Update (Persona Extraction)
     if (aiResponse.lead_update) {
-        // AI found new details (Budget, Preferences, etc). Save to DB.
+        // AI found new details (Budget, Preferences, etc). Save to DB (metadata JSONB).
         await repo.updateLead(lead.id, aiResponse.lead_update, aiResponse.thought_process)
     }
 
@@ -311,21 +311,24 @@ export class Repository {
     return lead
   }
 
-  // Store extracted persona into JSONB or fields
+  // Store extracted persona into JSONB metadata
   async updateLead(id: number, updates: any, thought?: string) {
       const cleanUpdates: any = {}
       if (updates.name) cleanUpdates.name = updates.name
       
-      // We assume the table has an 'ai_analysis' text or JSONB column
-      // Ideally we merge this, but for now we overwrite with latest valid data
-      const metadata = {
+      const newMetadata = {
           budget: updates.budget,
           preference: updates.location_preference,
           urgency: updates.urgency,
-          last_thought: thought
+          last_thought: thought,
+          updated_at: new Date().toISOString()
       }
-      cleanUpdates.ai_analysis = JSON.stringify(metadata)
       
+      // Update both metadata (JSONB) and ai_analysis (Text summary) for compatibility
+      cleanUpdates.metadata = newMetadata
+      cleanUpdates.ai_analysis = \`Budget: \${updates.budget || '?'}, Pref: \${updates.location_preference || '?'}, Urgency: \${updates.urgency || '?'}\`
+      
+      // Use SQL merge for JSONB if possible, or just overwrite in this simple implementation
       await this.sb.from("leads").update(cleanUpdates).eq("id", id)
   }
 
@@ -418,14 +421,36 @@ export class AIService {
   constructor(private openai: OpenAI) {}
 
   buildSystemPrompt(instruction: string, context: string, schedule: string, lead: any) {
-    // 1. Memory Injection
-    const leadMeta = lead.ai_analysis ? JSON.parse(lead.ai_analysis) : {};
+    // 1. Memory Injection (Safe Parsing)
+    let leadMeta: any = {};
+    
+    // Attempt to use metadata (preferred) or ai_analysis (legacy/text)
+    // NOTE: 'lead.metadata' usually comes as a JSON object from Supabase if defined as jsonb.
+    // If it was somehow stored as string or we are falling back to ai_analysis (text), we must check.
+    const rawData = lead.metadata || lead.ai_analysis;
+
+    if (rawData && typeof rawData === 'object') {
+        leadMeta = rawData;
+    } else if (typeof rawData === 'string') {
+        try {
+            if (rawData.trim().startsWith('{')) {
+                leadMeta = JSON.parse(rawData);
+            } else {
+                // Legacy text data (e.g., "Viewing Scheduled")
+                leadMeta = { note: rawData };
+            }
+        } catch {
+            leadMeta = { note: rawData };
+        }
+    }
+
     const leadContext = \`
 KNOWN CUSTOMER MEMORY:
 - Name: \${lead.name || "Unknown"}
 - Budget: \${leadMeta.budget || "Unknown"}
-- Preferences: \${leadMeta.preference || "Unknown"}
+- Preferences: \${leadMeta.preference || leadMeta.location_preference || "Unknown"}
 - Urgency: \${leadMeta.urgency || "Unknown"}
+- Notes: \${leadMeta.note || leadMeta.last_thought || ""}
 \`;
 
     // 2. The Core Prompt
