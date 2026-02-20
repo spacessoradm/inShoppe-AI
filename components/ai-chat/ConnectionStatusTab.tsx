@@ -120,7 +120,24 @@ serve(async (req) => {
     // 7. GATHER CONTEXT (RAG + Schedule + History)
     const settings = await repo.getSettings(profile.id)
     const schedule = await repo.getScheduleContext(orgId) // Scoped to Org
-    const knowledge = await repo.findKnowledge(body, openai, orgId) // Scoped to Org (Security Critical)
+    
+    // --- SMART SEARCH CONTEXT ---
+    // Instead of just searching for the current message (body), we combine it with known lead data.
+    // This ensures if user says "Landed", we search for "Landed KL < 1mil" based on history.
+    let searchQuery = body;
+    if (lead.metadata) {
+       try {
+           const meta = typeof lead.metadata === 'string' ? JSON.parse(lead.metadata) : lead.metadata;
+           // We append memory only if the user query is short/vague
+           if (body.length < 50) {
+               if (meta.budget) searchQuery += \` Budget: \${meta.budget}\`;
+               if (meta.preference) searchQuery += \` Preference: \${meta.preference}\`;
+               if (meta.location_preference) searchQuery += \` Location: \${meta.location_preference}\`;
+           }
+       } catch (e) {}
+    }
+    
+    const knowledge = await repo.findKnowledge(searchQuery, openai, orgId) 
     const history = await repo.getHistory(profile.id, sender)
 
     // 8. AI REASONING (Sales Engine)
@@ -423,10 +440,6 @@ export class AIService {
   buildSystemPrompt(instruction: string, context: string, schedule: string, lead: any) {
     // 1. Memory Injection (Safe Parsing)
     let leadMeta: any = {};
-    
-    // Attempt to use metadata (preferred) or ai_analysis (legacy/text)
-    // NOTE: 'lead.metadata' usually comes as a JSON object from Supabase if defined as jsonb.
-    // If it was somehow stored as string or we are falling back to ai_analysis (text), we must check.
     const rawData = lead.metadata || lead.ai_analysis;
 
     if (rawData && typeof rawData === 'object') {
@@ -436,7 +449,6 @@ export class AIService {
             if (rawData.trim().startsWith('{')) {
                 leadMeta = JSON.parse(rawData);
             } else {
-                // Legacy text data (e.g., "Viewing Scheduled")
                 leadMeta = { note: rawData };
             }
         } catch {
@@ -459,23 +471,24 @@ ROLE:
 \${instruction || "You are a top-tier Real Estate Sales Agent for InShoppe AI."}
 
 OBJECTIVE:
-Your goal is to **CLOSE THE DEAL** (Booking a viewing or getting a deposit).
-Adopt a "Consultative Sales" approach. Be professional, warm, and use localized English (Malaysia/Singapore style).
+Your goal is to **CLOSE THE DEAL**, but you must PROVIDE VALUE first.
 
 CRITICAL RULES:
-1. **Fact-Check**: Use the KNOWLEDGE BASE. If info is missing, say "I'll check with my team".
-2. **Sales Logic**:
-   - If user says "Too expensive", search KNOWLEDGE BASE for cheaper units.
-   - If user wants to book, propose a time.
-   - **Conflict Handling**: Look at [AVAILABILITY]. If the user asks for a slot listed as BUSY, say "That time is taken, but how about [Suggest 2 Alternatives]?"
-3. **Extraction**: Always try to extract Lead details (Name, Budget) into the JSON output.
+1. **Immediate Information**: You have all available information in the [KNOWLEDGE BASE] section below. DO NOT say "I will check", "Let me gather", "I'll look up", or "Please hold on". The search has already happened.
+2. **Show, Don't Tell**: If [KNOWLEDGE BASE] has properties, LIST THEM immediately with Name, Price, and Key Features.
+3. **Empty Results**: If [KNOWLEDGE BASE] is "No specific documents found..." or irrelevant:
+   - YOU MUST SAY: "I currently don't have any listings matching [User's Criteria] in my database."
+   - THEN ASK: "Would you like to register your interest so I can notify you when we have one?"
+   - DO NOT fake listings. DO NOT promise to check later.
+4. **Context & Memory**: You know the user's name and preferences from [KNOWN CUSTOMER MEMORY]. Use them to personalize the offer, but do not repeat them robotically unless confirming.
+5. **Extraction**: Always try to extract Lead details (Name, Budget) into the JSON output.
 
 CONTEXT:
 Current Time (KL): \${UTILS.getCurrentTime()}
 \${leadContext}
 
 KNOWLEDGE BASE (Organization Specific):
-\${context || "No specific documents found."}
+\${context || "No specific documents found matching the search criteria."}
 
 AVAILABILITY (Busy Slots):
 \${schedule}
