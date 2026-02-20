@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/utils';
+import { MASTER_SQL_SCRIPT } from '../SupabaseSetup';
 
 // --- DOCUMENT GENERATOR EDGE FUNCTION ---
 const DOC_GEN_CODE = `
@@ -406,23 +407,17 @@ export class Repository {
       const emb = await openai.embeddings.create({ model: "text-embedding-3-small", input: query })
       
       // RPC returns potential matches based on vector similarity
+      // Updated to filter by org_id directly in DB for accuracy
       const { data: matches } = await this.sb.rpc("match_knowledge", {
         query_embedding: emb.data[0].embedding,
-        match_threshold: 0.5,
-        match_count: 5 
+        match_threshold: 0.3, // Lower threshold for better recall
+        match_count: 5,
+        filter_org_id: orgId
       })
       
       if (!matches || matches.length === 0) return ""
 
-      // CRITICAL: Filter these matches against the organization_id to prevent data leaks.
-      // Even if RLS is off for service role, we must manually enforce tenancy here.
-      const matchIds = matches.map((m: any) => m.id)
-      const { data: validDocs } = await this.sb.from("knowledge")
-        .select("id, content")
-        .eq("organization_id", orgId) // <-- Security Filter
-        .in("id", matchIds)
-      
-      return validDocs?.map((c: any) => c.content).join("\\n\\n") || ""
+      return matches.map((c: any) => c.content).join("\\n\\n") || ""
     } catch (e) { 
         console.error("RAG Error", e)
         return "" 
@@ -634,10 +629,28 @@ export const ConnectionStatusTab: React.FC<ConnectionStatusTabProps> = ({
                         </div>
                     </CardContent>
                 </Card>
+
+                <Card className="border border-emerald-200 bg-emerald-50 text-slate-900 shadow-sm">
+                    <CardHeader>
+                        <CardTitle className="text-emerald-700">Step 1: Database Setup (SQL)</CardTitle>
+                        <CardDescription className="text-emerald-600/70">
+                            Run this SQL in Supabase to create tables and the <strong>match_knowledge</strong> function.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="bg-slate-900 p-4 rounded-lg overflow-x-auto text-xs text-emerald-300 font-mono border border-slate-800 max-h-[300px] shadow-inner">
+                            <pre>{MASTER_SQL_SCRIPT}</pre>
+                        </div>
+                        <div className="flex gap-2 mt-2">
+                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500 text-white" onClick={() => navigator.clipboard.writeText(MASTER_SQL_SCRIPT)}>Copy SQL</Button>
+                            <Button size="sm" variant="outline" className="border-emerald-200 text-emerald-700 hover:bg-emerald-100" onClick={() => window.open('https://supabase.com/dashboard/project/_/sql', '_blank')}>Open SQL Editor</Button>
+                        </div>
+                    </CardContent>
+                </Card>
                 
                 <Card className="border border-blue-200 bg-blue-50 text-slate-900 shadow-sm">
                     <CardHeader>
-                        <CardTitle className="text-blue-700">Required: OpenAI Proxy Function</CardTitle>
+                        <CardTitle className="text-blue-700">Step 2: OpenAI Proxy Function</CardTitle>
                         <CardDescription className="text-blue-600/70">
                             To fix CORS errors, you MUST deploy this function to Supabase as <code>openai-proxy</code>.
                         </CardDescription>

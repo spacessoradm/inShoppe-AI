@@ -199,11 +199,12 @@ create table if not exists bookings (
   created_at timestamptz default now()
 );
 
--- 11. Vector Search Function
+-- 11. Vector Search Function (Updated for Multi-Tenancy)
 create or replace function match_knowledge (
   query_embedding vector(768),
   match_threshold float,
-  match_count int
+  match_count int,
+  filter_org_id uuid
 )
 returns table (
   id bigint,
@@ -220,6 +221,7 @@ begin
     1 - (knowledge.embedding <=> query_embedding) as similarity
   from knowledge
   where 1 - (knowledge.embedding <=> query_embedding) > match_threshold
+  and knowledge.organization_id = filter_org_id
   order by knowledge.embedding <=> query_embedding
   limit match_count;
 end;
