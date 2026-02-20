@@ -408,6 +408,7 @@ export class Repository {
       
       // RPC returns potential matches based on vector similarity
       // Updated to filter by org_id directly in DB for accuracy
+      // NOTE: 'match_knowledge' is a Database Function created via SQL (see Step 1)
       const { data: matches } = await this.sb.rpc("match_knowledge", {
         query_embedding: emb.data[0].embedding,
         match_threshold: 0.3, // Lower threshold for better recall
